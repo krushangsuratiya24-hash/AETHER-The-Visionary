@@ -1,4 +1,5 @@
 import os
+import time
 import pytest
 import pygame
 from core.config import display_config
@@ -38,12 +39,30 @@ def test_display_event_pump():
     assert isinstance(events, list)
 
 def test_app_display_initialization():
+    """
+    Verifies that AetherApp creates a valid display surface in headless mode.
+    Background subsystem init is waited for before assertions.
+    """
     from main import AetherApp
     app = AetherApp()
     try:
         assert app.screen is not None, 'app.screen must be a valid surface'
         assert app.screen.get_size() == (1280, 720)
         assert os.environ.get('SDL_VIDEO_CENTERED') == '1'
+        # App starts in LOADING mode (background init running)
+        assert app.mode == 'LOADING'
         assert app.running is True
+
+        # Wait for background init (with a reasonable timeout)
+        deadline = time.time() + 30.0
+        while time.time() < deadline:
+            if app._init_done.is_set():
+                break
+            pygame.event.pump()
+            time.sleep(0.05)
+
+        assert app._init_done.is_set(), 'Background init did not complete within timeout'
+        assert app.camera is not None
+        assert app.tracker is not None
     finally:
         app._cleanup()
