@@ -112,6 +112,8 @@ class ElementalCultivationExperience(BaseExperience):
         self._switch_announce_timer = 0.0
         self._switch_announce_name  = ''
         self._switch_announce_color = (255, 255, 255)
+        # Debug overlay (toggled with D key)
+        self._debug_overlay = False
 
         # Audio tones
         self._sound_switch  = _make_tone(440.0, 0.12)
@@ -168,6 +170,9 @@ class ElementalCultivationExperience(BaseExperience):
 
     def handle_key(self, event: pygame.event.Event) -> bool:
         key = event.key
+        if key == pygame.K_d:
+            self._debug_overlay = not self._debug_overlay
+            return True
         mapping = {
             pygame.K_1: ElementID.PHOENIX_FLAME,
             pygame.K_2: ElementID.GOLDEN_SOLAR,
@@ -242,6 +247,10 @@ class ElementalCultivationExperience(BaseExperience):
 
         # HUD
         self._draw_hud(surface)
+
+        # Debug overlay
+        if self._debug_overlay:
+            self._draw_debug_overlay(surface)
 
         # Announce banner
         if self._switch_announce_timer > 0:
@@ -371,9 +380,26 @@ class ElementalCultivationExperience(BaseExperience):
 
         hands_col = (0, 255, 100) if self._raw_hands else (255, 60, 60)
         h_count = len(self._raw_hands)
-        t = self._font_small.render(f'HANDS TRACKED: {h_count}', True, hands_col)
+        two_str = '  ★ 2 HANDS ACTIVE ★' if gs.two_hands else ''
+        t = self._font_small.render(f'HANDS: {h_count}{two_str}', True,
+                                     (255, 100, 255) if gs.two_hands else hands_col)
         surface.blit(t, (px, py))
         py += 16
+
+        # Pinch indicator
+        if gs.pinch_ratio > 0.1:
+            pinch_col = (100, 200, 255)
+            pb_w = int((panel_w - 24) * gs.pinch_ratio)
+            pygame.draw.rect(surface, (20, 50, 80), (px, py, panel_w - 24, 6), border_radius=3)
+            pygame.draw.rect(surface, pinch_col, (px, py, pb_w, 6), border_radius=3)
+            pt = self._font_small.render(f'PINCH: {gs.pinch_ratio:.2f}', True, pinch_col)
+            surface.blit(pt, (px + panel_w - 24 - pt.get_width(), py - 14))
+            py += 10
+
+        # Debug toggle hint
+        t = self._font_small.render('[D] DEBUG', True, (60, 60, 80))
+        surface.blit(t, (px, py))
+        py += 14
 
         # Element selector (right panel)
         sel_x = w - 165
@@ -439,6 +465,48 @@ class ElementalCultivationExperience(BaseExperience):
         pygame.draw.rect(surface, color_full, (bx, y + 1, fill_w, bh - 2), border_radius=3)
         # Border
         pygame.draw.rect(surface, palette.BORDER_DIM, (bx, y + 1, bw, bh - 2), 1, border_radius=3)
+
+
+    # ── Debug Overlay (D-key toggle) ──────────────────────────────────────────
+
+    def _draw_debug_overlay(self, surface: pygame.Surface):
+        """Full gesture debug panel for tuning and verification."""
+        gs = self._gesture_state
+        w, h = self.width, self.height
+
+        panel_w = 280
+        panel_h = 295
+        panel_x = w // 2 - panel_w // 2
+        panel_y = h - panel_h - 30
+
+        panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
+        panel.fill((0, 0, 0, 210))
+        pygame.draw.rect(panel, (80, 200, 255), (0, 0, panel_w, panel_h), 1, border_radius=6)
+        surface.blit(panel, (panel_x, panel_y))
+
+        lines = [
+            ('DEBUG GESTURE MONITOR', (80, 200, 255)),
+            (f'HANDS: {len(self._raw_hands)}', (0, 255, 120) if self._raw_hands else (255, 60, 60)),
+            (f'PRIMARY:  {gs.gesture.value}', (255, 215, 0)),
+            (f'RIGHT:    {gs.right_gesture or "---"}', (180, 180, 255)),
+            (f'LEFT:     {gs.left_gesture or "---"}', (180, 255, 180)),
+            (f'PINCH:    {gs.pinch_ratio:.2f}', (100, 200, 255)),
+            (f'VELOCITY: {gs.speed:.3f} n/s', (255, 200, 100)),
+            (f'VEL_XY:   {gs.velocity_x:.2f}, {gs.velocity_y:.2f}', (200, 200, 100)),
+            (f'SWIPE:    {gs.swipe_dir or "---"} @ {gs.swipe_velocity:.2f}', (255, 215, 0)),
+            (f'2-HANDS:  {"YES" if gs.two_hands else "NO"}', (255, 100, 255) if gs.two_hands else (120, 120, 120)),
+            (f'2H-DIST:  {gs.two_hand_distance:.3f}', (220, 150, 255)),
+            (f'ENERGY:   {self._active_element.energy * 100:.0f}%', (0, 200, 255)),
+            (f'POWER:    {self._active_element.power * 100:.0f}%', (255, 100, 40)),
+            ('D=CLOSE DEBUG', (80, 80, 80)),
+        ]
+
+        py_off = panel_y + 8
+        for text, col in lines:
+            s = self._font_small.render(text, True, col)
+            surface.blit(s, (panel_x + 10, py_off))
+            py_off += 18
+
 
     # ── Announce Banner ───────────────────────────────────────────────────────
 

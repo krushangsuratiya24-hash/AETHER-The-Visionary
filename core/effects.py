@@ -296,6 +296,9 @@ class EffectComposer:
         return t
 
     def spawn_projectile(self, x, y, vx, vy, **kwargs) -> Projectile:
+        # Cap concurrent projectiles to keep performance bounded
+        if len(self.projectiles) >= 8:
+            return self.projectiles[0]  # return existing, don't spawn
         p = Projectile(x, y, vx, vy, **kwargs)
         self.projectiles.append(p)
         return p

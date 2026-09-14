@@ -35,8 +35,9 @@ class HandTracker:
     """
     Robust hand tracking pipeline using Google MediaPipe HandLandmarker.
     Auto-caches the model asset and outputs normalized 3D hand coordinates.
+    Supports up to 2 hands for Phase 2 multi-hand interaction.
     """
-    def __init__(self, model_path: Optional[str] = None, num_hands: int = 1, min_confidence: float = 0.5):
+    def __init__(self, model_path: Optional[str] = None, num_hands: int = 2, min_confidence: float = 0.5):
         self.model_path = model_path or paths_config.hand_landmarker_path
         self.num_hands = num_hands
         self.min_confidence = min_confidence
@@ -103,14 +104,26 @@ class HandTracker:
                     palm_z = sum(lms_list[i][2] for i in palm_indices) / len(palm_indices)
                     palm_center = (palm_x, palm_y, palm_z)
                     
-                    # Handedness
-                    handedness = "Right"
+                    # Handedness — MediaPipe reports the hand label from the
+                    # model's perspective, which is mirrored relative to the
+                    # user when the webcam image is not pre-flipped.
+                    # A hand the USER perceives as their RIGHT hand is
+                    # reported as "Left" by MediaPipe (and vice-versa).
+                    # We flip the label here so that handedness == what the
+                    # user actually sees (i.e. their right hand → "Right").
+                    raw_handedness = "Right"
                     confidence = 0.95
                     if detection_result.handedness and idx < len(detection_result.handedness):
                         categories = detection_result.handedness[idx]
                         if categories:
-                            handedness = categories[0].category_name
+                            raw_handedness = categories[0].category_name
                             confidence = categories[0].score
+
+                    # Mirror correction: flip Left↔Right to match user perspective
+                    if raw_handedness == "Left":
+                        handedness = "Right"
+                    else:
+                        handedness = "Left"
 
                     detected_hands.append(HandLandmarkData(
                         landmarks=lms_list,
@@ -122,6 +135,10 @@ class HandTracker:
                         handedness=handedness
                     ))
 
+            # Sort so the primary hand (highest confidence) is always first.
+            # This gives Phase 1 backward-compatible behaviour regardless of
+            # detection order returned by MediaPipe.
+            detected_hands.sort(key=lambda h: h.confidence, reverse=True)
             return detected_hands
         except Exception as e:
             # Prevent single-frame parsing anomalies from crashing the exhibition
