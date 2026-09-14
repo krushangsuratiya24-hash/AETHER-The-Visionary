@@ -304,7 +304,8 @@ class AetherApp:
                     self.elemental_experience.handle_gesture(current_gesture, active_action, norm_pos)
                     self.elemental_experience.update(dt)
                 elif self.mode == 'PHASE_SHIFT' and self.phase_shift_experience is not None:
-                    # Phase Shift: push camera frame, then update
+                    # Phase Shift: push hand landmarks + camera frame, then update
+                    self.phase_shift_experience.push_hands(hands)
                     if ret and frame is not None:
                         self.phase_shift_experience.push_camera_frame(frame)
                     self.phase_shift_experience.update(dt)
@@ -522,7 +523,7 @@ class AetherApp:
             {
                 'key': '3',
                 'title': 'PHASE SHIFT',
-                'subtitle': 'Clap Real-time Invisibility Segmentation',
+                'subtitle': 'Hand-Gesture Real-time Invisibility Segmentation',
                 'status': 'READY // UNLOCKED',
                 'active': True,
                 'color': (0, 220, 255),

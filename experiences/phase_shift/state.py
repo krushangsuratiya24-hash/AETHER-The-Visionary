@@ -1,167 +1,131 @@
 """
-AETHER — Phase Shift State Machine  (Phase 3)
+AETHER — Phase Shift Alpha Controller  (Phase 3 — Hand Power)
 
-States:
-    VISIBLE       — person is fully visible; background model is being updated.
-    PHASING_OUT   — transition in progress (visible → invisible).
-    INVISIBLE     — person is hidden; background composite is active.
-    PHASING_IN    — transition in progress (invisible → visible).
+Controls the current transparency alpha from 0.0 (fully visible) to
+1.0 (fully invisible) based on the confirmed hand gesture.
 
-Transitions (driven exclusively by confirmed clap events):
-    VISIBLE     + clap → PHASING_OUT
-    PHASING_OUT + transition_complete → INVISIBLE
-    INVISIBLE   + clap → PHASING_IN
-    PHASING_IN  + transition_complete → VISIBLE
+Gesture → target alpha mapping:
+    NONE          → 0.0  (visible)
+    ONE_FINGER    → 0.25 (25% transparent)
+    TWO_FINGERS   → 0.50 (50% transparent)
+    THREE_FINGERS → 0.75 (75% transparent)
+    FIVE_FINGERS  → 1.00 (fully invisible)
 
-The state machine does NOT accept clap events while a transition is in progress,
-preventing double-triggers.
+The alpha smoothly interpolates from its current value toward the target
+using a lerp per dt, giving fluid holographic transitions between levels.
+
+This replaces the binary clap-triggered VISIBLE/PHASING_OUT/INVISIBLE/PHASING_IN
+state machine from the old Phase 3 design.
 """
 from __future__ import annotations
 
-import time
-from enum import Enum
+from experiences.phase_shift.gestures import PhaseGesture, GESTURE_ALPHA
 
 
-class PhaseState(Enum):
-    VISIBLE     = 'VISIBLE'
-    PHASING_OUT = 'PHASING OUT'
-    INVISIBLE   = 'INVISIBLE'
-    PHASING_IN  = 'PHASING IN'
+# Lerp speed: larger = faster convergence
+# At speed=4.0 and 60fps, half-life ≈ 0.17s (fast but perceptually smooth)
+_DEFAULT_LERP_SPEED = 4.0
 
 
-class PhaseStateMachine:
+class AlphaController:
     """
-    Explicit state machine for Phase Shift transitions.
+    Smooth alpha interpolator for Phase Shift.
 
     Usage::
 
-        sm = PhaseStateMachine(phase_out_duration=1.8, phase_in_duration=1.8)
-        sm.trigger_clap()        # request a transition
-        sm.update(dt)            # advance timers (call every frame)
-
-        current_state  = sm.state
-        blend_alpha    = sm.blend_alpha    # 0=visible, 1=invisible
-        transition_t   = sm.transition_t   # 0→1 progress of active transition
-        just_completed = sm.just_completed # True for one frame when state settles
-
-    Attributes:
-        state (PhaseState):     Current state.
-        blend_alpha (float):    0.0 = fully visible, 1.0 = fully invisible.
-        transition_t (float):   0.0 → 1.0 progress through current transition.
-        just_completed (bool):  True for exactly one update() cycle when a
-                                transition (OUT or IN) completes.
+        ctrl = AlphaController(lerp_speed=4.0)
+        ctrl.set_gesture(PhaseGesture.TWO_FINGERS)   # called when gesture changes
+        ctrl.update(dt)                               # called every frame
+        blend_alpha = ctrl.alpha                      # current interpolated value
     """
 
-    def __init__(self, phase_out_duration: float = 1.8,
-                 phase_in_duration: float = 1.8):
-        self._phase_out_dur = phase_out_duration
-        self._phase_in_dur  = phase_in_duration
+    def __init__(self, lerp_speed: float = _DEFAULT_LERP_SPEED):
+        self._lerp_speed    = lerp_speed
+        self._target_alpha  = 0.0
+        self._alpha         = 0.0
 
-        self.state:          PhaseState = PhaseState.VISIBLE
-        self.blend_alpha:    float      = 0.0
-        self.transition_t:   float      = 0.0
-        self.just_completed: bool       = False
+        self._gesture       = PhaseGesture.NONE
+        self._prev_gesture  = PhaseGesture.NONE
 
-        self._transition_elapsed: float = 0.0
-        self._clap_queued:        bool  = False
+        # Flag: was there a transition this frame?
+        self.just_changed: bool = False
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Public API
-    # ─────────────────────────────────────────────────────────────────────────
+    # ── Public API ───────────────────────────────────────────────────────────
 
-    def trigger_clap(self) -> bool:
+    def set_gesture(self, gesture: PhaseGesture) -> None:
         """
-        Signal that a confirmed clap was detected.
-        Returns True if the clap was accepted (transition started or queued).
-        Returns False if ignored (transition already in progress).
+        Update the target gesture.  The alpha will smoothly lerp toward
+        the new target on subsequent update() calls.
         """
-        if self.state == PhaseState.VISIBLE:
-            self._enter_phasing_out()
-            return True
-        elif self.state == PhaseState.INVISIBLE:
-            self._enter_phasing_in()
-            return True
-        # Ignore clap during active transition
-        return False
+        self._prev_gesture = self._gesture
+        self._gesture      = gesture
+        new_target = GESTURE_ALPHA.get(gesture, 0.0)
 
-    def update(self, dt: float):
-        """Advance the state machine by dt seconds."""
-        self.just_completed = False
+        self.just_changed = (new_target != self._target_alpha)
+        self._target_alpha = new_target
 
-        if self.state == PhaseState.PHASING_OUT:
-            self._transition_elapsed += dt
-            t = min(1.0, self._transition_elapsed / self._phase_out_dur)
-            self.transition_t = t
-            # Smooth easing curve for blend
-            self.blend_alpha = _ease_in_out(t)
+    def update(self, dt: float) -> None:
+        """
+        Advance interpolation by dt seconds.
+        Call once per main loop frame.
+        """
+        speed = self._lerp_speed * dt
+        diff  = self._target_alpha - self._alpha
+        if abs(diff) < 0.001:
+            self._alpha = self._target_alpha
+        else:
+            self._alpha += diff * min(1.0, speed)
 
-            if t >= 1.0:
-                self.state       = PhaseState.INVISIBLE
-                self.blend_alpha = 1.0
-                self.transition_t = 1.0
-                self.just_completed = True
-                print('[PHASE-SM] → INVISIBLE')
+    # ── Read-only properties ─────────────────────────────────────────────────
 
-        elif self.state == PhaseState.PHASING_IN:
-            self._transition_elapsed += dt
-            t = min(1.0, self._transition_elapsed / self._phase_in_dur)
-            self.transition_t = t
-            # Blend goes from 1.0 → 0.0
-            self.blend_alpha = _ease_in_out(1.0 - t)
+    @property
+    def alpha(self) -> float:
+        """Current interpolated transparency alpha [0.0, 1.0]."""
+        return self._alpha
 
-            if t >= 1.0:
-                self.state       = PhaseState.VISIBLE
-                self.blend_alpha = 0.0
-                self.transition_t = 1.0
-                self.just_completed = True
-                print('[PHASE-SM] → VISIBLE')
+    @property
+    def target_alpha(self) -> float:
+        """Target transparency alpha [0.0, 1.0]."""
+        return self._target_alpha
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Internal transitions
-    # ─────────────────────────────────────────────────────────────────────────
+    @property
+    def gesture(self) -> PhaseGesture:
+        """Currently active (confirmed) gesture."""
+        return self._gesture
 
-    def _enter_phasing_out(self):
-        self.state = PhaseState.PHASING_OUT
-        self._transition_elapsed = 0.0
-        self.transition_t = 0.0
-        print('[PHASE-SM] VISIBLE → PHASING_OUT')
+    @property
+    def is_active(self) -> bool:
+        """True when any transparency is active (alpha > 0)."""
+        return self._alpha > 0.01
 
-    def _enter_phasing_in(self):
-        self.state = PhaseState.PHASING_IN
-        self._transition_elapsed = 0.0
-        self.transition_t = 0.0
-        print('[PHASE-SM] INVISIBLE → PHASING_IN')
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # Convenience properties
-    # ─────────────────────────────────────────────────────────────────────────
+    @property
+    def is_fully_invisible(self) -> bool:
+        """True when fully at 100% invisible."""
+        return self._alpha > 0.98
 
     @property
     def is_transitioning(self) -> bool:
-        return self.state in (PhaseState.PHASING_OUT, PhaseState.PHASING_IN)
+        """True when alpha is still converging toward target."""
+        return abs(self._target_alpha - self._alpha) > 0.005
 
-    @property
-    def is_invisible(self) -> bool:
-        return self.state == PhaseState.INVISIBLE
-
-    @property
-    def is_visible(self) -> bool:
-        return self.state == PhaseState.VISIBLE
+    def phase_level_label(self) -> str:
+        """Human-readable level label for HUD."""
+        alpha = self._target_alpha
+        if alpha == 0.0:
+            return 'VISIBLE'
+        elif alpha <= 0.25:
+            return '25%'
+        elif alpha <= 0.50:
+            return '50%'
+        elif alpha <= 0.75:
+            return '75%'
+        else:
+            return 'INVISIBLE'
 
     def reset(self):
-        """Return to VISIBLE state (called on enter/exit experience)."""
-        self.state               = PhaseState.VISIBLE
-        self.blend_alpha         = 0.0
-        self.transition_t        = 0.0
-        self.just_completed      = False
-        self._transition_elapsed = 0.0
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Easing function
-# ─────────────────────────────────────────────────────────────────────────────
-
-def _ease_in_out(t: float) -> float:
-    """Smooth S-curve: starts slow, accelerates, decelerates at end."""
-    t = max(0.0, min(1.0, t))
-    return t * t * (3.0 - 2.0 * t)
+        """Reset to fully visible (called on enter/exit)."""
+        self._alpha         = 0.0
+        self._target_alpha  = 0.0
+        self._gesture       = PhaseGesture.NONE
+        self._prev_gesture  = PhaseGesture.NONE
+        self.just_changed   = False

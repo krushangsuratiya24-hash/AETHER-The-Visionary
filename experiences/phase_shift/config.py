@@ -1,5 +1,5 @@
 """
-AETHER — Phase Shift Configuration  (Phase 3)
+AETHER — Phase Shift Configuration  (Phase 3 — Hand Power rework)
 All tuneable parameters for the Phase Shift experience in one place.
 """
 from __future__ import annotations
@@ -10,10 +10,10 @@ from typing import Tuple
 @dataclass
 class PhaseShiftConfig:
     # ── Visual transition timings ────────────────────────────────────────────
-    # Duration (seconds) of the PHASING_OUT transition
-    phase_out_duration: float = 1.8
-    # Duration (seconds) of the PHASING_IN transition
-    phase_in_duration:  float = 1.8
+    # Speed of alpha interpolation toward target (higher = faster)
+    # Value is the lerp coefficient per frame (applied per-frame, not per-second)
+    # Effective half-life ≈ ln(2) / (lerp_speed * fps) seconds
+    alpha_lerp_speed: float = 4.0       # fast but smooth
 
     # ── Segmentation update rate ─────────────────────────────────────────────
     # Update segmentation every N main-loop frames (1 = every frame, 2 = every other)
@@ -28,10 +28,10 @@ class PhaseShiftConfig:
     silhouette_color: Tuple[int,int,int] = (0,  255, 180)   # teal
 
     # ── VFX particle counts ──────────────────────────────────────────────────
-    # Number of fragment particles spawned during phase-out burst
-    fragment_count:   int = 120
-    # Number of reconstruction particles spawned during phase-in
-    recon_count:      int = 90
+    # Number of fragment particles spawned on transparency change
+    fragment_count:   int = 80
+    # Number of reconstruction particles spawned on transparency decrease
+    recon_count:      int = 60
 
     # ── Scanline overlay ─────────────────────────────────────────────────────
     scanline_spacing: int  = 4       # pixels between scanlines
@@ -40,10 +40,6 @@ class PhaseShiftConfig:
     # ── Background model ─────────────────────────────────────────────────────
     # Warmup period — seconds to collect background before going invisible
     bg_warmup_secs: float = 2.0
-
-    # ── Clap sensitivity ─────────────────────────────────────────────────────
-    # Passed to ClapDetector.  1.0 = default, >1 = more sensitive
-    clap_sensitivity: float = 1.0
 
     # ── Debug ────────────────────────────────────────────────────────────────
     show_mask_debug: bool = False

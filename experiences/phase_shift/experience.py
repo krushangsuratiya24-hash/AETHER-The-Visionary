@@ -1,43 +1,79 @@
 """
-AETHER — Phase Shift Experience  (Phase 3)
-👻 QUANTUM DISSOLUTION / SPECTRAL RECONSTRUCTION
+AETHER — Phase Shift Experience  (Phase 3 — HAND POWER rework)
+👻 PHASE SHIFT — HAND POWER
+
+The user's hand controls their body transparency.
 
 Architecture:
     PhaseShiftExperience orchestrates:
         • ThreadedCamera          — existing AETHER camera (reused)
         • PersonSegmenter         — MediaPipe selfie segmenter
         • BackgroundCompositor    — running background model + compositing
-        • ClapDetector            — microphone audio pipeline
-        • PhaseStateMachine       — VISIBLE / PHASING_OUT / INVISIBLE / PHASING_IN
+        • PhaseGestureClassifier  — hand-gesture to transparency level
+        • AlphaController         — smooth lerp of blend alpha
         • PhaseShiftVFX           — all visual effects
         • Phase Shift HUD         — status display
 
+Gesture → Transparency:
+    ☝ ONE FINGER     → 25%  (mostly visible, subtle distortion)
+    ✌ TWO FINGERS    → 50%  (clearly translucent, holographic)
+    🖖 THREE FINGERS  → 75%  (strong phase-shift, silhouette breakup)
+    🖐 FULL HAND      → 100% (pure invisibility via segmentation composite)
+
 Controls:
-    Real clap  → toggle phase shift (primary exhibition interaction)
-    [K]        → [DEV] keyboard clap fallback (clearly labeled in HUD)
-    [D]        → toggle debug overlay (audio telemetry, mask, etc.)
-    [ESC]      → return to AETHER launcher (handled by main.py)
+    Hand gesture → phase level (primary interaction, no microphone required)
+    [D]          → toggle debug overlay
+    [ESC]        → return to AETHER launcher (handled by main.py)
+
+NO microphone required.
+NO clap detection required.
 """
 from __future__ import annotations
 
 import math
 import time
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
 import pygame
 
 from core.config import palette, display_config
-from core.gestures import GestureType
 from core.particles import ParticlePool
 from core.segmentation import PersonSegmenter
-from core.audio import ClapDetector
 from core.compositor import BackgroundCompositor
+from core.tracker import HandLandmarkData
 from experiences.base import BaseExperience
-from experiences.phase_shift.state import PhaseStateMachine, PhaseState
+from experiences.phase_shift.gestures import (
+    PhaseGesture, PhaseGestureClassifier, GestureResult, GESTURE_ALPHA,
+)
+from experiences.phase_shift.state import AlphaController
 from experiences.phase_shift.vfx import PhaseShiftVFX, PHASE_CYAN, PHASE_VIOLET, PHASE_TEAL
 from experiences.phase_shift.config import phase_shift_config
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Gesture label strings for HUD
+# ─────────────────────────────────────────────────────────────────────────────
+
+_GESTURE_LABELS = {
+    PhaseGesture.NONE:          'NONE',
+    PhaseGesture.ONE_FINGER:    'ONE FINGER',
+    PhaseGesture.TWO_FINGERS:   'TWO FINGERS',
+    PhaseGesture.THREE_FINGERS: 'THREE FINGERS',
+    PhaseGesture.FIVE_FINGERS:  'FULL HAND',
+}
+
+_LEVEL_COLORS = {
+    PhaseGesture.NONE:          (120, 140, 160),
+    PhaseGesture.ONE_FINGER:    (0,   220, 255),     # cyan
+    PhaseGesture.TWO_FINGERS:   (0,   255, 180),     # teal
+    PhaseGesture.THREE_FINGERS: (180,  60, 255),     # violet
+    PhaseGesture.FIVE_FINGERS:  (255,  80, 200),     # magenta
+}
+
+# Threshold: alpha above this = "stable invisible" — suppress person-local VFX
+_INVISIBLE_SUPPRESS_ALPHA = 0.90
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -46,8 +82,8 @@ from experiences.phase_shift.config import phase_shift_config
 
 class PhaseShiftExperience(BaseExperience):
     """
-    Phase 3 — PHASE SHIFT
-    Genuine real-time invisibility triggered by a hand clap.
+    Phase 3 — PHASE SHIFT (Hand Power)
+    Genuine real-time transparency controlled by hand gesture count.
     """
 
     POOL_CAPACITY = 2000
@@ -58,15 +94,10 @@ class PhaseShiftExperience(BaseExperience):
         self._cfg    = phase_shift_config
 
         # ── Sub-systems (created once, reused across enter/exit cycles) ──────
-        # lazy=True: model is NOT loaded here — hardware starts in enter(),
-        # so constructing the experience object never touches hardware.
         self._segmenter   = PersonSegmenter(lazy=True)
         self._compositor  = BackgroundCompositor()
-        self._clap        = ClapDetector(sensitivity=self._cfg.clap_sensitivity)
-        self._state_machine = PhaseStateMachine(
-            phase_out_duration=self._cfg.phase_out_duration,
-            phase_in_duration=self._cfg.phase_in_duration,
-        )
+        self._gesture_clf = PhaseGestureClassifier()
+        self._alpha_ctrl  = AlphaController(lerp_speed=self._cfg.alpha_lerp_speed)
 
         # Particle pool
         self._pool = ParticlePool(capacity=self.POOL_CAPACITY)
@@ -77,8 +108,11 @@ class PhaseShiftExperience(BaseExperience):
         self._debug_mode   = False
         self._time         = 0.0
         self._seg_frame_counter = 0
-        self._phase_out_triggered = False
-        self._phase_in_triggered  = False
+
+        # Last gesture result for HUD
+        self._last_result: Optional[GestureResult] = None
+        self._prev_gesture: PhaseGesture = PhaseGesture.NONE
+        self._last_hands: List[HandLandmarkData] = []
 
         # Most recent composited frame (numpy BGR) ready to blit
         self._current_frame:  Optional[np.ndarray] = None
@@ -86,11 +120,12 @@ class PhaseShiftExperience(BaseExperience):
 
         # Fonts
         pygame.font.init()
-        self._font_title  = pygame.font.SysFont('Consolas', 26, bold=True)
+        self._font_title  = pygame.font.SysFont('Consolas', 24, bold=True)
         self._font_label  = pygame.font.SysFont('Consolas', 16, bold=True)
         self._font_small  = pygame.font.SysFont('Consolas', 13)
         self._font_badge  = pygame.font.SysFont('Consolas', 12, bold=True)
-        self._font_state  = pygame.font.SysFont('Consolas', 36, bold=True)
+        self._font_state  = pygame.font.SysFont('Consolas', 32, bold=True)
+        self._font_level  = pygame.font.SysFont('Consolas', 40, bold=True)
 
         # Cache: last camera frame (BGR) — set externally by main loop
         self._camera_frame: Optional[np.ndarray] = None
@@ -106,44 +141,54 @@ class PhaseShiftExperience(BaseExperience):
 
     def enter(self):
         self._active = True
-        self._state_machine.reset()
+        self._gesture_clf.reset()
+        self._alpha_ctrl.reset()
         self._compositor.reset()
         self._pool.clear()
         self._vfx._time = 0.0
         self._current_frame = None
         self._person_mask   = None
         self._time = 0.0
-        self._phase_out_triggered = False
-        self._phase_in_triggered  = False
+        self._prev_gesture  = PhaseGesture.NONE
+        self._last_result   = None
+        self._last_hands    = []
 
         # Start hardware subsystems (lazy — not started in __init__)
-        self._segmenter.start()   # loads MediaPipe model (creates executor thread)
-        self._clap.start()        # opens microphone stream
-        print('[PHASE3] Phase Shift — entered.')
+        self._segmenter.start()   # loads MediaPipe model
+        print('[PHASE3] Phase Shift (Hand Power) — entered.')
 
     def exit(self):
         self._active = False
-        self._clap.stop()
         self._segmenter.stop()
         self._pool.clear()
         print('[PHASE3] Phase Shift — exited.')
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Input
+    # Input — hand landmarks from main loop
     # ─────────────────────────────────────────────────────────────────────────
 
-    def handle_gesture(self, gesture: GestureType, action: GestureType,
-                       hand_pos: Tuple[float, float]):
-        pass   # Phase Shift does not use hand gesture input
+    def push_hands(self, hands: List[HandLandmarkData]) -> None:
+        """
+        Called by main.py with the list of detected hands each frame.
+        Uses the first (highest-confidence) hand for gesture classification.
+        """
+        self._last_hands = hands
+        hand = hands[0] if hands else None
+        result = self._gesture_clf.update(hand)
+        self._last_result = result
+
+        # Update alpha controller when gesture changes
+        if result.gesture != self._prev_gesture:
+            self._alpha_ctrl.set_gesture(result.gesture)
+            self._prev_gesture = result.gesture
+            print(f'[PHASE3] Gesture → {result.gesture.value}  α={result.target_alpha:.2f}')
+
+    def handle_gesture(self, gesture, action, hand_pos):
+        pass   # handled via push_hands()
 
     def handle_key(self, event: pygame.event.Event) -> bool:
         if event.key == pygame.K_d:
             self._debug_mode = not self._debug_mode
-            return True
-        # [K] — DEV keyboard clap fallback
-        if event.key == pygame.K_k:
-            print('[PHASE3] [DEV] Keyboard fallback clap injected')
-            self._clap.inject_clap()
             return True
         return False
 
@@ -180,65 +225,41 @@ class PhaseShiftExperience(BaseExperience):
             self._fps_counter = 0
             self._fps_timer = now
 
-        sm = self._state_machine
+        # Advance alpha interpolation
+        self._alpha_ctrl.update(dt)
 
-        # ── Poll clap detector ─────────────────────────────────────────────
-        if self._clap.poll_clap():
-            accepted = sm.trigger_clap()
-            if accepted:
-                print(f'[PHASE3] Clap accepted → state: {sm.state.value}')
-
-        # ── Advance state machine ──────────────────────────────────────────
-        sm.update(dt)
-
-        # ── Camera + segmentation ──────────────────────────────────────────
+        # Camera + segmentation
         frame = self._camera_frame
         if frame is None:
             return
 
-        # Get full-resolution person mask
+        # Get full-resolution person mask  (H, W) uint8
         person_mask = self._segmenter.get_mask_for_frame(frame)
-        self._person_mask = person_mask
+        self._person_mask = person_mask   # always (H, W)
 
-        # ── Background model update (only during visible states) ───────────
-        if sm.state in (PhaseState.VISIBLE, PhaseState.PHASING_OUT):
-            # During phase-out we still want to keep the BG estimate fresh
-            # for any newly visible regions
+        blend_alpha = self._alpha_ctrl.alpha
+
+        # Background model update: update when not fully invisible
+        if blend_alpha < 0.95:
             self._compositor.update_background(frame, person_mask)
         elif not self._compositor.has_background:
-            # Before first segmentation, prime the background model
+            # Still warming up — update without mask
             self._compositor.update_background(frame, None)
 
-        # ── VFX update ──────────────────────────────────────────────────────
+        # VFX update
         self._vfx.update(dt)
 
-        # ── One-shot VFX triggers ──────────────────────────────────────────
-        if sm.state == PhaseState.PHASING_OUT and not self._phase_out_triggered:
-            self._phase_out_triggered = True
-            self._phase_in_triggered  = False
-            self._vfx.on_phase_out_start(person_mask, self._width, self._height)
+        # Trigger particle burst on gesture change
+        if self._alpha_ctrl.just_changed and person_mask is not None:
+            if blend_alpha > 0.05:
+                self._vfx.on_phase_out_start(person_mask, self._width, self._height)
+            else:
+                self._vfx.on_phase_in_start(person_mask, self._width, self._height)
 
-        if sm.state == PhaseState.PHASING_IN and not self._phase_in_triggered:
-            self._phase_in_triggered  = True
-            self._phase_out_triggered = False
-            self._vfx.on_phase_in_start(person_mask, self._width, self._height)
-
-        if sm.just_completed:
-            cx = self._width  // 2
-            cy = self._height // 2
-            phase_out_completed = (sm.state == PhaseState.INVISIBLE)
-            self._vfx.on_transition_complete(cx, cy, phase_out_completed)
-
-        if sm.state == PhaseState.VISIBLE:
-            self._phase_out_triggered = False
-        if sm.state == PhaseState.INVISIBLE:
-            self._phase_in_triggered = False
-
-        # ── Compositing ─────────────────────────────────────────────────────
-        blend_alpha = sm.blend_alpha
+        # Compositing
         composited = self._compositor.composite(frame, person_mask, blend_alpha)
 
-        # Apply frame-level VFX (edge glow, glitch)
+        # Apply frame-level VFX (edge glow, channel shift)
         composited = self._vfx.apply_frame_effects(composited, person_mask, blend_alpha)
         self._current_frame = composited
 
@@ -250,10 +271,16 @@ class PhaseShiftExperience(BaseExperience):
         if not self._active:
             return
 
-        # ── Draw composited camera frame ────────────────────────────────────
+        blend_alpha = self._alpha_ctrl.alpha
+
+        # ── Pure-invisible mode: suppress ALL person-local VFX ───────────────
+        # When alpha is at or near 1.0, the person is genuinely gone.
+        # We must not draw anything that would reveal their location.
+        stable_invisible = (blend_alpha >= _INVISIBLE_SUPPRESS_ALPHA)
+
+        # Draw composited camera frame (background compositor handles invisibility)
         if self._current_frame is not None:
             frame_rgb = cv2.cvtColor(self._current_frame, cv2.COLOR_BGR2RGB)
-            # Resize to fill Pygame surface if needed
             sw, sh = surface.get_size()
             fh, fw = frame_rgb.shape[:2]
             if (fw, fh) != (sw, sh):
@@ -265,42 +292,47 @@ class PhaseShiftExperience(BaseExperience):
         else:
             surface.fill(palette.VOID_DARK)
 
-        # ── Draw Pygame VFX layer (particles, tiles, shockwaves) ──────────
-        sm = self._state_machine
-        blend_alpha = sm.blend_alpha
-        phase_out_dir = sm.state in (PhaseState.PHASING_OUT, PhaseState.INVISIBLE)
+        if stable_invisible:
+            # ── Clean background — ONLY draw HUD and nothing over the person ──
+            self._draw_hud(surface)
+            if self._debug_mode:
+                self._draw_debug_overlay(surface)
+            return
 
+        # ── Transition / partial transparency: draw VFX layer ────────────────
         if self._person_mask is not None:
-            # Resize mask to surface dimensions
             sw, sh = surface.get_size()
             pmask_disp = cv2.resize(self._person_mask, (sw, sh))
         else:
             pmask_disp = None
 
         if pmask_disp is not None:
-            self._vfx.draw_pygame_effects(surface, pmask_disp, blend_alpha, phase_out_dir)
+            self._vfx.draw_pygame_effects(
+                surface, pmask_disp, blend_alpha,
+                phase_out=(blend_alpha > 0.0)
+            )
 
-        # ── Scanline band overlay (across whole image during transition) ────
-        if blend_alpha > 0.05:
+        # Scanline overlay during active phase (transition only, not at full invisible)
+        if 0.05 < blend_alpha < _INVISIBLE_SUPPRESS_ALPHA:
             self._draw_scanline_overlay(surface, blend_alpha)
 
-        # ── HUD ─────────────────────────────────────────────────────────────
+        # HUD
         self._draw_hud(surface)
 
-        # ── Debug overlay ────────────────────────────────────────────────────
+        # Debug overlay
         if self._debug_mode:
             self._draw_debug_overlay(surface)
 
     # ─────────────────────────────────────────────────────────────────────────
-    # Scanline overlay (across full frame during transitions)
+    # Scanline overlay
     # ─────────────────────────────────────────────────────────────────────────
 
     def _draw_scanline_overlay(self, surface: pygame.Surface, blend_alpha: float):
-        """Subtle full-frame horizontal scanlines during transition."""
+        """Subtle full-frame horizontal scanlines during active phase."""
         w, h = surface.get_size()
         spacing = 4
         offset = int((self._time * 40) % spacing)
-        intensity = int(blend_alpha * 0.12 * 255)
+        intensity = int(blend_alpha * 0.10 * 255)
         if intensity < 3:
             return
         col = (
@@ -319,73 +351,78 @@ class PhaseShiftExperience(BaseExperience):
     # ─────────────────────────────────────────────────────────────────────────
 
     def _draw_hud(self, surface: pygame.Surface):
-        sm    = self._state_machine
+        ctrl  = self._alpha_ctrl
+        clf   = self._gesture_clf
         w, h  = surface.get_size()
 
+        result = self._last_result
+
         # ── Top-left panel ────────────────────────────────────────────────
-        panel_w, panel_h = 260, 180
+        panel_w, panel_h = 280, 230
         panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
         panel.fill((8, 12, 22, 200))
         pygame.draw.rect(panel, PHASE_CYAN, (0, 0, panel_w, panel_h), 1, border_radius=6)
         surface.blit(panel, (16, 60))
 
-        px, py = 28, 70
+        px, py = 28, 68
 
         # Title
-        title = self._font_title.render('PHASE SHIFT', True, PHASE_CYAN)
+        title = self._font_title.render('AETHER', True, PHASE_CYAN)
         surface.blit(title, (px, py))
-        py += 28
+        py += 26
 
-        sub = self._font_label.render('AETHER  //  PHASE 3', True, palette.TEXT_MUTED)
+        sub = self._font_label.render('PHASE SHIFT', True, PHASE_CYAN)
         surface.blit(sub, (px, py))
-        py += 24
+        py += 22
 
         pygame.draw.line(surface, PHASE_CYAN, (px, py), (px + panel_w - 24, py), 1)
         py += 8
 
-        # ── Phase state ───────────────────────────────────────────────────
-        state_str = sm.state.value
-        state_colors = {
-            PhaseState.VISIBLE:     palette.GREEN_MATRIX,
-            PhaseState.PHASING_OUT: palette.GOLD_ACCENT,
-            PhaseState.INVISIBLE:   PHASE_VIOLET,
-            PhaseState.PHASING_IN:  PHASE_TEAL,
-        }
-        state_col = state_colors.get(sm.state, palette.TEXT_WHITE)
+        # ── Phase level ───────────────────────────────────────────────────
+        level_str = ctrl.phase_level_label()
+        gesture   = ctrl.gesture if result is None else result.gesture
+        lev_col   = _LEVEL_COLORS.get(gesture, PHASE_CYAN)
 
-        # Pulse during transition
-        if sm.is_transitioning:
+        # Pulse when transitioning
+        if ctrl.is_transitioning:
             pulse = 0.7 + 0.3 * math.sin(self._time * 6.0 * math.tau)
-            state_col = tuple(int(c * pulse) for c in state_col)
+            lev_col = tuple(int(c * pulse) for c in lev_col)
 
-        sstate = self._font_label.render(f'STATE:  {state_str}', True, state_col)
-        surface.blit(sstate, (px, py))
+        lev_lbl = self._font_label.render('PHASE LEVEL', True, palette.TEXT_MUTED)
+        surface.blit(lev_lbl, (px, py))
+        py += 17
+
+        lev_txt = self._font_label.render(level_str, True, lev_col)
+        surface.blit(lev_txt, (px, py))
         py += 20
 
-        # Progress bar during transitions
-        if sm.is_transitioning:
-            bar_w = panel_w - 44
-            t = sm.transition_t
-            pygame.draw.rect(surface, (30, 40, 60), (px, py, bar_w, 6), border_radius=3)
-            fill = max(2, int(bar_w * t))
-            pygame.draw.rect(surface, state_col, (px, py, fill, 6), border_radius=3)
-            py += 12
+        # Alpha progress bar
+        bar_w = panel_w - 44
+        pygame.draw.rect(surface, (30, 40, 60), (px, py, bar_w, 7), border_radius=3)
+        fill = max(2, int(bar_w * ctrl.alpha))
+        pygame.draw.rect(surface, lev_col, (px, py, fill, 7), border_radius=3)
+        py += 13
 
-        py += 6
+        pygame.draw.line(surface, (30, 40, 60), (px, py), (px + panel_w - 24, py), 1)
+        py += 7
 
-        # ── Mic status ────────────────────────────────────────────────────
-        mic_ok  = self._clap.available
-        mic_col = palette.GREEN_MATRIX if mic_ok else palette.MAGENTA_LASER
-        mic_str = '● MIC READY' if mic_ok else '● MIC UNAVAILABLE'
-        mic_txt = self._font_badge.render(f'MIC    {mic_str}', True, mic_col)
-        surface.blit(mic_txt, (px, py))
-        py += 16
+        # ── Current gesture ────────────────────────────────────────────────
+        gest_str  = _GESTURE_LABELS.get(gesture, 'NONE')
+        gest_col  = _LEVEL_COLORS.get(gesture, palette.TEXT_MUTED)
+
+        gest_lbl = self._font_badge.render('GESTURE', True, palette.TEXT_MUTED)
+        surface.blit(gest_lbl, (px, py))
+        py += 15
+
+        gest_txt = self._font_label.render(gest_str, True, gest_col)
+        surface.blit(gest_txt, (px, py))
+        py += 20
 
         # ── Segmentation status ────────────────────────────────────────────
         seg_ok  = self._segmenter.ready
         seg_col = palette.GREEN_MATRIX if seg_ok else palette.MAGENTA_LASER
-        seg_str = '● SEG READY' if seg_ok else '● SEG UNAVAILABLE'
-        seg_txt = self._font_badge.render(f'SEG    {seg_str}', True, seg_col)
+        seg_str = '● READY' if seg_ok else '● UNAVAILABLE'
+        seg_txt = self._font_badge.render(f'SEGMENTATION  {seg_str}', True, seg_col)
         surface.blit(seg_txt, (px, py))
         py += 16
 
@@ -394,15 +431,12 @@ class PhaseShiftExperience(BaseExperience):
         fps_txt = self._font_badge.render(f'FPS    {int(self._fps)}', True, fps_col)
         surface.blit(fps_txt, (px, py))
 
-        # ── Large state banner (center, during transitions) ───────────────
-        if sm.is_transitioning or sm.state == PhaseState.INVISIBLE:
-            self._draw_state_banner(surface, sm.state, sm.blend_alpha)
+        # ── Large level banner during transition (NOT at stable invisible) ──
+        if 0.05 < ctrl.alpha < _INVISIBLE_SUPPRESS_ALPHA:
+            self._draw_level_banner(surface, ctrl, gesture)
 
         # ── Bottom help bar ────────────────────────────────────────────────
-        if self._clap.available:
-            help_str = 'CLAP to phase in/out   |  [K] DEV fallback  |  [D] Debug  |  [ESC] Menu'
-        else:
-            help_str = '[K] DEV keyboard clap (mic unavailable)   |  [D] Debug  |  [ESC] Menu'
+        help_str = '☝ 25%   ✌ 50%   🖖 75%   🖐 INVISIBLE   [D] Debug   [ESC] Menu'
         hs = self._font_small.render(help_str, True, palette.TEXT_MUTED)
         hx = w // 2 - hs.get_width() // 2
         bg = pygame.Surface((hs.get_width() + 16, 18), pygame.SRCALPHA)
@@ -410,31 +444,25 @@ class PhaseShiftExperience(BaseExperience):
         surface.blit(bg, (hx - 8, h - 22))
         surface.blit(hs, (hx, h - 20))
 
-    def _draw_state_banner(self, surface: pygame.Surface,
-                           state: PhaseState, blend_alpha: float):
-        """Large centered banner showing current state during transitions."""
+    def _draw_level_banner(self, surface: pygame.Surface,
+                           ctrl: AlphaController,
+                           gesture: PhaseGesture):
+        """Large centered banner showing current phase level."""
         w, h = surface.get_size()
         cx, cy = w // 2, h // 2
 
-        state_colors = {
-            PhaseState.PHASING_OUT: palette.GOLD_ACCENT,
-            PhaseState.INVISIBLE:   PHASE_VIOLET,
-            PhaseState.PHASING_IN:  PHASE_TEAL,
-        }
-        col = state_colors.get(state, palette.TEXT_WHITE)
-        pulse = 0.8 + 0.2 * math.sin(self._time * 4.0 * math.tau)
+        col = _LEVEL_COLORS.get(gesture, PHASE_CYAN)
+        pulse = 0.8 + 0.2 * math.sin(self._time * 3.0 * math.tau)
         col = tuple(int(c * pulse) for c in col)
 
-        if state == PhaseState.INVISIBLE:
-            txt = 'PHASE SHIFTED'
-        else:
-            txt = state.value
+        level_str = ctrl.phase_level_label()
+        # Never show "PHASE SHIFTED" banner at stable invisible
+        # (nothing should appear over the person's location)
+        label_txt = f'PHASE  {level_str}'
 
-        # Shadow
-        shadow = self._font_state.render(txt, True, (0, 0, 0))
+        shadow = self._font_state.render(label_txt, True, (0, 0, 0))
         surface.blit(shadow, (cx - shadow.get_width() // 2 + 2, cy - 18 + 2))
-        # Main text
-        label = self._font_state.render(txt, True, col)
+        label = self._font_state.render(label_txt, True, col)
         surface.blit(label, (cx - label.get_width() // 2, cy - 18))
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -442,11 +470,12 @@ class PhaseShiftExperience(BaseExperience):
     # ─────────────────────────────────────────────────────────────────────────
 
     def _draw_debug_overlay(self, surface: pygame.Surface):
-        tel   = self._clap.telemetry
-        sm    = self._state_machine
+        ctrl  = self._alpha_ctrl
+        clf   = self._gesture_clf
         w, h  = surface.get_size()
+        result = self._last_result
 
-        panel_w, panel_h = 290, 340
+        panel_w, panel_h = 310, 370
         px, py = w - panel_w - 16, 60
 
         panel = pygame.Surface((panel_w, panel_h), pygame.SRCALPHA)
@@ -454,32 +483,47 @@ class PhaseShiftExperience(BaseExperience):
         pygame.draw.rect(panel, PHASE_CYAN, (0, 0, panel_w, panel_h), 1, border_radius=6)
         surface.blit(panel, (px, py))
 
+        # Mask dimensions
+        mask_dims = (
+            f'{self._person_mask.shape[0]}x{self._person_mask.shape[1]}'
+            if self._person_mask is not None else 'N/A'
+        )
+
+        # Extended finger flags [thumb, index, middle, ring, pinky]
+        ext = clf.extended_flags
+        n_fingers = clf.finger_count
+        if len(ext) == 5:
+            ext_str = (f'T={int(ext[0])} I={int(ext[1])} M={int(ext[2])} '
+                       f'R={int(ext[3])} P={int(ext[4])}')
+        else:
+            ext_str = 'N/A'
+
+        gesture_label = result.gesture.value if result else 'N/A'
+        target_pct = f'{int(ctrl.target_alpha * 100)}%'
+        alpha_pct  = f'{int(ctrl.alpha * 100)}%'
+
         lines = [
-            ('DEBUG TELEMETRY [D]', PHASE_CYAN),
+            ('DEBUG  [D]', PHASE_CYAN),
             ('', palette.TEXT_MUTED),
-            # Audio
-            (f'RMS:           {tel.rms:.4f}', palette.TEXT_WHITE),
-            (f'NOISE FLOOR:   {tel.noise_floor:.4f}', palette.TEXT_WHITE),
-            (f'RATIO:         {tel.ratio:.2f}x', palette.TEXT_WHITE),
-            (f'CONFIDENCE:    {tel.confidence:.2f}', palette.GREEN_MATRIX if tel.confidence > 0.5 else palette.TEXT_WHITE),
-            (f'COOLDOWN:      {tel.cooldown_remaining:.2f}s', palette.GOLD_ACCENT),
-            (f'IN TRANSIENT:  {"YES" if tel.in_transient else "NO"}', PHASE_VIOLET if tel.in_transient else palette.TEXT_MUTED),
-            (f'MIC AVAILABLE: {"YES" if tel.mic_available else "NO"}', palette.GREEN_MATRIX if tel.mic_available else palette.MAGENTA_LASER),
+            (f'FINGERS:       {n_fingers}', palette.TEXT_WHITE),
+            (f'GESTURE:       {gesture_label}', PHASE_CYAN),
+            (f'CONFIDENCE:    {(f"{result.confidence:.2f}" if result else "N/A")}',
+             palette.GREEN_MATRIX),
+            (f'FINGER FLAGS:  {ext_str}', palette.TEXT_WHITE),
             ('', palette.TEXT_MUTED),
-            # Segmentation
-            (f'SEG READY:     {"YES" if self._segmenter.ready else "NO"}', palette.GREEN_MATRIX if self._segmenter.ready else palette.MAGENTA_LASER),
-            (f'SEG FPS:       {self._segmenter.fps:.1f}', palette.TEXT_WHITE),
-            (f'MASK AGE:      {self._segmenter.mask_age:.2f}s', palette.TEXT_WHITE),
-            (f'BG WARM:       {"YES" if self._compositor.has_background else "NO"}', palette.GREEN_MATRIX if self._compositor.has_background else palette.GOLD_ACCENT),
-            (f'BG COVERAGE:   {self._compositor.bg_coverage:.1%}', palette.TEXT_WHITE),
+            (f'TARGET:        {target_pct}', palette.GOLD_ACCENT),
+            (f'ALPHA:         {alpha_pct}', palette.TEXT_WHITE),
+            (f'INVISIBLE:     {"YES" if ctrl.alpha >= _INVISIBLE_SUPPRESS_ALPHA else "NO"}',
+             PHASE_VIOLET if ctrl.alpha >= _INVISIBLE_SUPPRESS_ALPHA else palette.TEXT_MUTED),
             ('', palette.TEXT_MUTED),
-            # State machine
-            (f'STATE:         {sm.state.value}', PHASE_CYAN),
-            (f'BLEND ALPHA:   {sm.blend_alpha:.2f}', palette.TEXT_WHITE),
-            (f'TRANSITION T:  {sm.transition_t:.2f}', palette.TEXT_WHITE),
+            (f'SEGMENTATION:  {"READY" if self._segmenter.ready else "UNAVAIL"}',
+             palette.GREEN_MATRIX if self._segmenter.ready else palette.MAGENTA_LASER),
+            (f'MASK:          {mask_dims}', palette.TEXT_WHITE),
+            (f'BG WARM:       {"YES" if self._compositor.has_background else "NO"}',
+             palette.GREEN_MATRIX if self._compositor.has_background else palette.GOLD_ACCENT),
             ('', palette.TEXT_MUTED),
-            # Particles
-            (f'PARTICLES:     {self._pool.active_count}/{self._pool._capacity}', palette.TEXT_MUTED),
+            (f'FPS:           {int(self._fps)}', palette.TEXT_WHITE),
+            (f'HANDS:         {len(self._last_hands)}', palette.TEXT_WHITE),
             ('D=CLOSE DEBUG', (60, 60, 80)),
         ]
 
@@ -488,15 +532,3 @@ class PhaseShiftExperience(BaseExperience):
             s = self._font_small.render(text, True, col)
             surface.blit(s, (px + 10, y_off))
             y_off += 16
-
-        # Mini mask preview
-        if self._cfg.show_mask_debug and self._person_mask is not None:
-            mask_small = cv2.resize(self._person_mask, (120, 68))
-            mask_rgb   = cv2.cvtColor(mask_small, cv2.COLOR_GRAY2RGB)
-            mask_surf  = pygame.surfarray.make_surface(
-                np.transpose(mask_rgb, (1, 0, 2))
-            )
-            surface.blit(mask_surf, (px + 10, py + panel_h - 85))
-            pygame.draw.rect(surface, PHASE_CYAN, (px + 9, py + panel_h - 86, 122, 70), 1)
-            lbl = self._font_small.render('MASK', True, PHASE_CYAN)
-            surface.blit(lbl, (px + 12, py + panel_h - 95))

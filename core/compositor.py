@@ -124,6 +124,9 @@ class BackgroundCompositor:
             # No mask available — update everything (warmup mode)
             self._bg = alpha * frame_f + (1.0 - alpha) * self._bg
         else:
+            # Normalise mask to (H, W) — squeeze any trailing singleton channel
+            if person_mask.ndim == 3 and person_mask.shape[2] == 1:
+                person_mask = person_mask[:, :, 0]
             # Resize mask to match frame if needed
             if person_mask.shape[:2] != (h, w):
                 pmask = cv2.resize(person_mask, (w, h))
@@ -182,6 +185,10 @@ class BackgroundCompositor:
         h, w = frame.shape[:2]
         frame_f = frame.astype(np.float32)
 
+        # Normalise mask to (H, W) — squeeze any trailing singleton channel axis
+        if person_mask.ndim == 3 and person_mask.shape[2] == 1:
+            person_mask = person_mask[:, :, 0]
+
         # Resize mask to match frame
         if person_mask.shape[:2] != (h, w):
             pmask = cv2.resize(person_mask, (w, h))
@@ -189,8 +196,10 @@ class BackgroundCompositor:
             pmask = person_mask.copy()
 
         # Soft-edge the mask with Gaussian blur for anti-aliased transitions
+        # pmask_soft is (H, W, 1) for broadcasting against (H, W, 3) frame
         pmask_soft = cv2.GaussianBlur(pmask.astype(np.float32), (11, 11), 0) / 255.0
-        pmask_soft = pmask_soft[:, :, np.newaxis]   # (H, W, 1) for broadcasting
+        if pmask_soft.ndim == 2:
+            pmask_soft = pmask_soft[:, :, np.newaxis]   # (H, W) → (H, W, 1)
 
         # Background layer
         if self._bg is not None:

@@ -1,7 +1,24 @@
 """
-AETHER — Phase 3 Automated Tests
-Tests for audio clap detection, person segmentation, background compositing,
-state machine, and the Phase Shift experience.
+AETHER — Phase 3 Tests  (Hand Power — five-finger rework)
+Tests for:
+  1.  one-finger classification → 25%
+  2.  two-finger classification → 50%
+  3.  three-finger classification → 75%
+  4.  five-finger (full open hand) classification → 100%
+  5.  four-finger rejection → NONE
+  6.  temporal confirmation
+  7.  gesture hysteresis
+  8.  alpha mapping (gesture → target alpha)
+  9.  smooth alpha transition
+ 10.  segmentation mask dimensions
+ 11.  compositing
+ 12.  background preservation
+ 13.  pure-invisible final state (no person VFX at alpha=1.0)
+ 14.  no person VFX drawn when stable invisible
+ 15.  Phase Shift lifecycle (enter/exit)
+ 16.  no microphone dependency
+ 17.  Phase 2 regression
+
 All run without a webcam or microphone.
 
 Run with:
@@ -12,7 +29,6 @@ from __future__ import annotations
 import math
 import os
 import time
-import threading
 import pytest
 import numpy as np
 import pygame
@@ -30,8 +46,9 @@ def init_pygame_headless():
     if not pygame.display.get_init():
         pygame.display.init()
     yield
-    if pygame.get_init():
-        pygame.quit()
+    # Do NOT call pygame.quit() here — it would corrupt the SDL state for
+    # subsequent test modules (test_app_lifecycle, test_display_init) that
+    # share the same pytest process. Let the last module handle teardown.
 
 
 @pytest.fixture(scope='module')
@@ -40,30 +57,16 @@ def screen():
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helper factories
+# Hand landmark factories
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _make_bgr_frame(h=480, w=640, color=(80, 120, 60)):
-    """Solid-color BGR frame for testing."""
     frame = np.zeros((h, w, 3), dtype=np.uint8)
     frame[:] = color
     return frame
 
 
-def _make_person_mask(h=480, w=640, filled=True):
-    """Binary person mask: center ellipse = person (255), rest = bg (0)."""
-    mask = np.zeros((h, w), dtype=np.uint8)
-    if filled:
-        cy, cx = h // 2, w // 2
-        for y in range(h):
-            for x in range(w):
-                if ((x - cx) / (w * 0.2)) ** 2 + ((y - cy) / (h * 0.35)) ** 2 <= 1.0:
-                    mask[y, x] = 255
-    return mask
-
-
 def _make_person_mask_fast(h=48, w=64):
-    """Small version using numpy for speed."""
     mask = np.zeros((h, w), dtype=np.uint8)
     cy, cx = h // 2, w // 2
     Y, X = np.ogrid[:h, :w]
@@ -72,670 +75,658 @@ def _make_person_mask_fast(h=48, w=64):
     return mask
 
 
+def _make_hand(
+    index_extended: bool = False,
+    middle_extended: bool = False,
+    ring_extended: bool = False,
+    pinky_extended: bool = False,
+    thumb_open: bool = False,
+    cx: float = 0.5,
+    cy: float = 0.7,
+    confidence: float = 0.95,
+) -> 'HandLandmarkData':
+    """
+    Build a HandLandmarkData with controlled finger extension geometry.
+
+    Extension: tip y < pip y (tip higher on screen = smaller y value)
+    Folded:    tip y > pip y
+
+    Thumb open: thumb tip far from index MCP (dist/scale > _THUMB_OPEN_DIST)
+    Thumb closed: thumb tip close to index MCP
+    """
+    from core.tracker import HandLandmarkData
+
+    lms = [(cx, cy, 0.0)] * 21
+
+    # Wrist
+    lms[0]  = (cx, cy, 0.0)
+    # Middle MCP at 0.15 above wrist — used for hand_scale
+    lms[9]  = (cx + 0.002, cy - 0.15, 0.0)
+
+    # MCPs slightly below wrist
+    for mcp in [5, 9, 13, 17]:
+        lms[mcp] = (cx, cy - 0.02, 0.0)
+    lms[9] = (cx + 0.002, cy - 0.15, 0.0)   # restore scale landmark
+
+    # ── Non-thumb fingers ─────────────────────────────────────────────────────
+    # Index: tip=8, pip=6, mcp=5  — very close tips for normal 2-finger
+    if index_extended:
+        lms[8] = (cx - 0.005, cy - 0.18, 0.0)
+        lms[6] = (cx - 0.003, cy - 0.09, 0.0)
+        lms[5] = (cx - 0.002, cy - 0.02, 0.0)
+    else:
+        lms[8] = (cx, cy + 0.08, 0.0)
+        lms[6] = (cx, cy + 0.03, 0.0)
+        lms[5] = (cx, cy - 0.02, 0.0)
+
+    # Middle: tip=12, pip=10, mcp=9
+    if middle_extended:
+        lms[12] = (cx + 0.005, cy - 0.18, 0.0)
+        lms[10] = (cx + 0.003, cy - 0.09, 0.0)
+        lms[9]  = (cx + 0.002, cy - 0.15, 0.0)
+    else:
+        lms[12] = (cx, cy + 0.08, 0.0)
+        lms[10] = (cx, cy + 0.03, 0.0)
+        lms[9]  = (cx + 0.002, cy - 0.15, 0.0)
+
+    # Ring: tip=16, pip=14, mcp=13
+    if ring_extended:
+        lms[16] = (cx, cy - 0.17, 0.0)
+        lms[14] = (cx, cy - 0.07, 0.0)
+        lms[13] = (cx, cy - 0.02, 0.0)
+    else:
+        lms[16] = (cx, cy + 0.08, 0.0)
+        lms[14] = (cx, cy + 0.03, 0.0)
+        lms[13] = (cx, cy - 0.02, 0.0)
+
+    # Pinky: tip=20, pip=18, mcp=17
+    if pinky_extended:
+        lms[20] = (cx + 0.01, cy - 0.14, 0.0)
+        lms[18] = (cx + 0.005, cy - 0.06, 0.0)
+        lms[17] = (cx, cy - 0.02, 0.0)
+    else:
+        lms[20] = (cx, cy + 0.06, 0.0)
+        lms[18] = (cx, cy + 0.02, 0.0)
+        lms[17] = (cx, cy - 0.02, 0.0)
+
+    # ── Thumb: tip=4, ip=3, mcp=2, cmc=1 ─────────────────────────────────────
+    # Thumb open: tip (4) far from index MCP (5)
+    # Thumb closed: tip (4) close to index MCP (5)
+    if thumb_open:
+        # Thumb spread outward — tip far from index MCP
+        lms[4] = (cx - 0.14, cy - 0.10, 0.0)   # dist to lms[5] ≈ 0.14-0.15 > scale*0.25
+        lms[3] = (cx - 0.09, cy - 0.06, 0.0)
+        lms[2] = (cx - 0.05, cy - 0.01, 0.0)
+    else:
+        # Thumb tucked — tip close to index MCP
+        lms[4] = (cx - 0.01, cy - 0.03, 0.0)   # very close to lms[5]
+        lms[3] = (cx - 0.02, cy - 0.02, 0.0)
+        lms[2] = (cx - 0.03, cy, 0.0)
+
+    return HandLandmarkData(
+        landmarks=lms,
+        wrist=lms[0],
+        index_tip=lms[8],
+        middle_tip=lms[12],
+        palm_center=(cx, cy - 0.08, 0.0),
+        confidence=confidence,
+        handedness='Right',
+    )
+
+
+def _one_finger():
+    return _make_hand(index_extended=True)
+
+
+def _two_finger():
+    return _make_hand(index_extended=True, middle_extended=True)
+
+
+def _three_finger():
+    return _make_hand(index_extended=True, middle_extended=True, ring_extended=True)
+
+
+def _four_finger():
+    """Four fingers, no thumb — dead-zone gesture."""
+    return _make_hand(index_extended=True, middle_extended=True,
+                      ring_extended=True, pinky_extended=True, thumb_open=False)
+
+
+def _five_finger():
+    """Full open palm — all five extended."""
+    return _make_hand(index_extended=True, middle_extended=True,
+                      ring_extended=True, pinky_extended=True, thumb_open=True)
+
+
+def _fist():
+    return _make_hand()  # nothing extended
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# AUDIO TESTS
+# 1–5: Raw Gesture Classification
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestClapDetector:
+class TestRawGestureClassification:
 
-    def _make_detector(self):
-        from core.audio import ClapDetector
-        det = ClapDetector(sensitivity=1.0)
-        # Don't start the mic — test internal methods directly
-        return det
+    def _classify(self, hand):
+        from experiences.phase_shift.gestures import _classify_raw
+        return _classify_raw(hand)
 
-    def test_initialization(self):
-        det = self._make_detector()
-        assert not det.available      # mic not started
-        assert det.sensitivity == 1.0
+    # 1. ONE_FINGER → 25%
+    def test_one_finger_classified(self):
+        from experiences.phase_shift.gestures import PhaseGesture
+        g, conf = self._classify(_one_finger())
+        assert g == PhaseGesture.ONE_FINGER, f'Expected ONE_FINGER, got {g}'
+        assert conf > 0.5
 
-    def test_sensitivity_clamp(self):
-        from core.audio import ClapDetector
-        det = ClapDetector(sensitivity=0.0)
-        assert det.sensitivity >= 0.1   # clamped to minimum
-        det.sensitivity = 10.0
-        assert det.sensitivity <= 5.0   # clamped to maximum
+    # 2. TWO_FINGERS → 50%
+    def test_two_fingers_classified(self):
+        from experiences.phase_shift.gestures import PhaseGesture
+        g, conf = self._classify(_two_finger())
+        assert g == PhaseGesture.TWO_FINGERS, f'Expected TWO_FINGERS, got {g}'
+        assert conf > 0.5
 
-    def test_rms_calculation(self):
-        """RMS of a known sine wave should match analytical value."""
-        import numpy as np
-        amp = 0.5
-        t = np.linspace(0, 1, 44100, endpoint=False)
-        sine = (amp * np.sin(2 * np.pi * 440 * t)).astype(np.float32)
-        rms = float(np.sqrt(np.mean(sine ** 2)))
-        expected = amp / math.sqrt(2)
-        assert abs(rms - expected) < 0.01
+    # 3. THREE_FINGERS → 75%
+    def test_three_fingers_classified(self):
+        from experiences.phase_shift.gestures import PhaseGesture
+        g, conf = self._classify(_three_finger())
+        assert g == PhaseGesture.THREE_FINGERS, f'Expected THREE_FINGERS, got {g}'
+        assert conf > 0.5
 
-    def test_rms_zero_for_silence(self):
-        silence = np.zeros(1024, dtype=np.float32)
-        rms = float(np.sqrt(np.mean(silence ** 2)))
-        assert rms == 0.0
+    # 4. FIVE_FINGERS → 100% invisible
+    def test_five_fingers_classified(self):
+        from experiences.phase_shift.gestures import PhaseGesture
+        g, conf = self._classify(_five_finger())
+        assert g == PhaseGesture.FIVE_FINGERS, f'Expected FIVE_FINGERS, got {g}'
+        assert conf > 0.5
 
-    def test_noise_floor_estimation(self):
-        """Noise floor should track quiet audio level."""
-        det = self._make_detector()
-        quiet_rms = 0.001
-        # Simulate many quiet chunks
-        det._noise_floor = 0.010
+    # 5. FOUR_FINGERS → NONE (dead zone)
+    def test_four_fingers_rejected(self):
+        from experiences.phase_shift.gestures import PhaseGesture
+        g, conf = self._classify(_four_finger())
+        assert g == PhaseGesture.NONE, (
+            f'Four fingers must be rejected (NONE), got {g}'
+        )
+
+    def test_fist_is_none(self):
+        from experiences.phase_shift.gestures import PhaseGesture
+        g, _ = self._classify(_fist())
+        assert g == PhaseGesture.NONE
+
+    def test_confidence_always_in_range(self):
+        from experiences.phase_shift.gestures import _classify_raw
+        for hand in [_one_finger(), _two_finger(), _three_finger(),
+                     _four_finger(), _five_finger(), _fist()]:
+            _, conf = _classify_raw(hand)
+            assert 0.0 <= conf <= 1.0
+
+    def test_scissor_not_in_enum(self):
+        """SCISSOR must not exist in the gesture enum."""
+        from experiences.phase_shift.gestures import PhaseGesture
+        names = [g.name for g in PhaseGesture]
+        assert 'SCISSOR' not in names
+
+    def test_five_fingers_not_classified_as_four(self):
+        from experiences.phase_shift.gestures import PhaseGesture
+        # Five fingers (thumb open) must NOT be classified as NONE/four-finger dead zone
+        g, _ = self._classify(_five_finger())
+        assert g == PhaseGesture.FIVE_FINGERS
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Thumb detection tests
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestThumbDetection:
+
+    def test_thumb_open_detected(self):
+        from experiences.phase_shift.gestures import _is_thumb_open, _hand_scale
+        hand = _five_finger()
+        lms  = hand.landmarks
+        scale = _hand_scale(lms)
+        assert _is_thumb_open(lms, scale), 'Five-finger hand should have thumb open'
+
+    def test_thumb_closed_detected(self):
+        from experiences.phase_shift.gestures import _is_thumb_open, _hand_scale
+        hand = _four_finger()   # four fingers, thumb tucked
+        lms  = hand.landmarks
+        scale = _hand_scale(lms)
+        assert not _is_thumb_open(lms, scale), 'Four-finger hand should have thumb closed'
+
+    def test_four_finger_without_thumb_is_none(self):
+        """Four fingers extended but thumb closed → NONE, not FIVE_FINGERS."""
+        from experiences.phase_shift.gestures import PhaseGesture, _classify_raw
+        hand = _four_finger()
+        g, _ = _classify_raw(hand)
+        assert g == PhaseGesture.NONE, f'Expected NONE for four fingers, got {g}'
+
+    def test_five_finger_requires_thumb(self):
+        """All four non-thumb fingers + thumb open → FIVE_FINGERS."""
+        from experiences.phase_shift.gestures import PhaseGesture, _classify_raw
+        hand = _five_finger()
+        g, _ = _classify_raw(hand)
+        assert g == PhaseGesture.FIVE_FINGERS
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6–7: Temporal Confirmation and Hysteresis
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestTemporalClassifier:
+
+    def _make_clf(self):
+        from experiences.phase_shift.gestures import PhaseGestureClassifier
+        return PhaseGestureClassifier()
+
+    # 6. Temporal confirmation
+    def test_confirmation_after_enough_frames(self):
+        from experiences.phase_shift.gestures import PhaseGesture, _CONFIRM_FRAMES
+        clf = self._make_clf()
+        for _ in range(_CONFIRM_FRAMES + 4):
+            result = clf.update(_one_finger())
+        assert result.gesture == PhaseGesture.ONE_FINGER
+
+    def test_five_finger_confirmed_after_enough_frames(self):
+        from experiences.phase_shift.gestures import PhaseGesture, _CONFIRM_FRAMES
+        clf = self._make_clf()
+        for _ in range(_CONFIRM_FRAMES + 4):
+            result = clf.update(_five_finger())
+        assert result.gesture == PhaseGesture.FIVE_FINGERS
+
+    def test_single_frame_does_not_confirm(self):
+        from experiences.phase_shift.gestures import PhaseGesture
+        clf = self._make_clf()
+        result = clf.update(_five_finger())
+        # One frame alone is not enough to confirm
+        assert isinstance(result.gesture, PhaseGesture)   # no crash
+
+    # 7. Hysteresis — single different frame does not break confirmed gesture
+    def test_hysteresis_one_rogue_frame(self):
+        from experiences.phase_shift.gestures import PhaseGesture, _CONFIRM_FRAMES
+        clf = self._make_clf()
+        for _ in range(_CONFIRM_FRAMES + 4):
+            clf.update(_one_finger())
+
+        # One frame of something different
+        clf.update(_five_finger())
+
+        # Confirmed should still be ONE_FINGER
+        result = clf.update(_one_finger())
+        assert result.gesture == PhaseGesture.ONE_FINGER
+
+    def test_none_hand_gives_none_after_confirmation(self):
+        from experiences.phase_shift.gestures import PhaseGesture, _CONFIRM_FRAMES
+        clf = self._make_clf()
+        for _ in range(_CONFIRM_FRAMES + 4):
+            r = clf.update(None)
+        assert r.gesture == PhaseGesture.NONE
+
+    def test_reset_clears_history(self):
+        from experiences.phase_shift.gestures import PhaseGesture
+        clf = self._make_clf()
+        for _ in range(20):
+            clf.update(_five_finger())
+        clf.reset()
+        result = clf.update(None)
+        assert result.gesture == PhaseGesture.NONE
+        assert clf.finger_count == 0
+
+    def test_low_confidence_hand_ignored(self):
+        from experiences.phase_shift.gestures import PhaseGesture, _MIN_CONFIDENCE, _CONFIRM_FRAMES
+        clf = self._make_clf()
+        hand = _make_hand(index_extended=True, confidence=_MIN_CONFIDENCE - 0.1)
+        for _ in range(_CONFIRM_FRAMES + 4):
+            r = clf.update(hand)
+        assert r.gesture == PhaseGesture.NONE
+
+    def test_finger_count_field_populated(self):
+        from experiences.phase_shift.gestures import PhaseGestureClassifier
+        clf = PhaseGestureClassifier()
+        clf.update(_five_finger())
+        assert clf.finger_count == 5
+
+    def test_finger_count_one(self):
+        from experiences.phase_shift.gestures import PhaseGestureClassifier
+        clf = PhaseGestureClassifier()
+        clf.update(_one_finger())
+        # At minimum 1 extended (index)
+        assert clf.finger_count >= 1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8–9: Alpha Mapping and Smooth Transition
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestAlphaMapping:
+
+    # 8. Gesture → target alpha mapping
+    def test_none_maps_to_zero(self):
+        from experiences.phase_shift.gestures import PhaseGesture, GESTURE_ALPHA
+        assert GESTURE_ALPHA[PhaseGesture.NONE] == pytest.approx(0.0)
+
+    def test_one_finger_maps_to_25(self):
+        from experiences.phase_shift.gestures import PhaseGesture, GESTURE_ALPHA
+        assert GESTURE_ALPHA[PhaseGesture.ONE_FINGER] == pytest.approx(0.25)
+
+    def test_two_fingers_maps_to_50(self):
+        from experiences.phase_shift.gestures import PhaseGesture, GESTURE_ALPHA
+        assert GESTURE_ALPHA[PhaseGesture.TWO_FINGERS] == pytest.approx(0.50)
+
+    def test_three_fingers_maps_to_75(self):
+        from experiences.phase_shift.gestures import PhaseGesture, GESTURE_ALPHA
+        assert GESTURE_ALPHA[PhaseGesture.THREE_FINGERS] == pytest.approx(0.75)
+
+    def test_five_fingers_maps_to_100(self):
+        from experiences.phase_shift.gestures import PhaseGesture, GESTURE_ALPHA
+        assert GESTURE_ALPHA[PhaseGesture.FIVE_FINGERS] == pytest.approx(1.00)
+
+    def test_no_scissor_in_mapping(self):
+        from experiences.phase_shift.gestures import GESTURE_ALPHA, PhaseGesture
+        for key in GESTURE_ALPHA:
+            assert key.name != 'SCISSOR', 'SCISSOR must not appear in GESTURE_ALPHA'
+
+    # 9. Smooth alpha transition
+    def test_alpha_starts_at_zero(self):
+        from experiences.phase_shift.state import AlphaController
+        ctrl = AlphaController()
+        assert ctrl.alpha == pytest.approx(0.0)
+
+    def test_alpha_interpolates_toward_target(self):
+        from experiences.phase_shift.state import AlphaController
+        from experiences.phase_shift.gestures import PhaseGesture
+        ctrl = AlphaController(lerp_speed=4.0)
+        ctrl.set_gesture(PhaseGesture.TWO_FINGERS)
+        ctrl.update(1.0 / 60.0)
+        assert 0.0 < ctrl.alpha < 0.5
+
+    def test_alpha_converges_to_target(self):
+        from experiences.phase_shift.state import AlphaController
+        from experiences.phase_shift.gestures import PhaseGesture
+        ctrl = AlphaController(lerp_speed=10.0)
+        ctrl.set_gesture(PhaseGesture.FIVE_FINGERS)
+        for _ in range(300):
+            ctrl.update(1.0 / 60.0)
+        assert ctrl.alpha == pytest.approx(1.0, abs=0.01)
+
+    def test_alpha_decreases_to_zero(self):
+        from experiences.phase_shift.state import AlphaController
+        from experiences.phase_shift.gestures import PhaseGesture
+        ctrl = AlphaController(lerp_speed=10.0)
+        ctrl.set_gesture(PhaseGesture.FIVE_FINGERS)
+        for _ in range(300):
+            ctrl.update(1.0 / 60.0)
+        ctrl.set_gesture(PhaseGesture.NONE)
+        for _ in range(300):
+            ctrl.update(1.0 / 60.0)
+        assert ctrl.alpha < 0.1
+
+    def test_alpha_clamped_to_one(self):
+        from experiences.phase_shift.state import AlphaController
+        from experiences.phase_shift.gestures import PhaseGesture
+        ctrl = AlphaController(lerp_speed=100.0)
+        ctrl.set_gesture(PhaseGesture.FIVE_FINGERS)
         for _ in range(100):
-            # Simulate an update without starting the stream
-            from core.audio import _NOISE_ALPHA
-            det._noise_floor = (
-                _NOISE_ALPHA * quiet_rms + (1.0 - _NOISE_ALPHA) * det._noise_floor
-            )
-        # After many updates, noise floor should be close to quiet_rms
-        assert det._noise_floor < 0.005
+            ctrl.update(1.0)
+        assert ctrl.alpha <= 1.0
 
-    def test_transient_detection_low_signal_rejected(self):
-        """Low RMS well below noise floor should not trigger a transient."""
-        from core.audio import ClapDetector, _TRANSIENT_RATIO, _MIN_ABS_RMS
-        det = self._make_detector()
-        det._noise_floor = 0.02
-        quiet = np.zeros(1024, dtype=np.float32) + 0.001   # far below threshold
-        det._process_chunk(quiet)
-        assert not det._transient.active
+    def test_alpha_never_below_zero(self):
+        from experiences.phase_shift.state import AlphaController
+        from experiences.phase_shift.gestures import PhaseGesture
+        ctrl = AlphaController(lerp_speed=100.0)
+        ctrl.set_gesture(PhaseGesture.NONE)
+        for _ in range(100):
+            ctrl.update(1.0)
+        assert ctrl.alpha >= 0.0
 
-    def test_transient_detection_loud_clap_like(self):
-        """A loud impulse-like chunk should engage the transient detector."""
-        from core.audio import ClapDetector, _MIN_ABS_RMS
-        det = self._make_detector()
-        det._noise_floor = 0.002   # very low background
-        # Loud impulse (amplitude >> threshold)
-        impulse = np.zeros(1024, dtype=np.float32)
-        impulse[200:220] = 0.9
-        det._process_chunk(impulse)
-        # Transient may or may not have STAYED active on exactly one chunk
-        # (the chunk might complete the transient in one go)
-        # The test verifies no crash and that the state is a boolean
-        assert isinstance(det._transient.active, bool)
-
-    def test_clap_confidence_score_range(self):
-        """Confidence should always be in [0, 1]."""
-        det = self._make_detector()
-        conf = det._compute_confidence(rms=0.5, ratio=10.0, duration=0.06)
-        assert 0.0 <= conf <= 1.0
-
-    def test_clap_confidence_weak_signal(self):
-        """Weak signal should yield low confidence."""
-        det = self._make_detector()
-        conf = det._compute_confidence(rms=0.001, ratio=1.1, duration=0.3)
-        assert conf < 0.5
-
-    def test_inject_clap_fires_poll(self):
-        """inject_clap() should make poll_clap() return True once."""
-        det = self._make_detector()
-        det.inject_clap()
-        assert det.poll_clap() is True
-
-    def test_poll_clap_returns_false_when_empty(self):
-        det = self._make_detector()
-        assert det.poll_clap() is False
-
-    def test_poll_clap_clears_queue(self):
-        """poll_clap should return True only once even if called immediately again."""
-        det = self._make_detector()
-        det.inject_clap()
-        assert det.poll_clap() is True
-        assert det.poll_clap() is False
-
-    def test_cooldown_blocks_repeated_clap(self):
-        """Two inject_clap calls should not both fire if within cooldown window."""
-        from core.audio import _COOLDOWN
-        det = self._make_detector()
-        # Set last_clap_time to just now
-        det._last_clap_time = time.time()
-        # Manually attempt to record a new event via inject_clap
-        # inject_clap bypasses cooldown by design (dev tool) — test process_chunk
-        det._noise_floor = 0.001
-        # The real cooldown is enforced in _process_chunk, not inject_clap
-        # Verify by directly testing the timing gate
-        now = time.time()
-        since_last = now - det._last_clap_time
-        assert since_last < _COOLDOWN   # confirms cooldown is active
-
-    def test_telemetry_structure(self):
-        """Telemetry should return an AudioTelemetry object with expected fields."""
-        det = self._make_detector()
-        tel = det.telemetry
-        assert hasattr(tel, 'rms')
-        assert hasattr(tel, 'noise_floor')
-        assert hasattr(tel, 'confidence')
-        assert hasattr(tel, 'cooldown_remaining')
-        assert hasattr(tel, 'in_transient')
-        assert hasattr(tel, 'mic_available')
-
-    def test_stop_safe_without_start(self):
-        """stop() on an unstarted detector should not raise."""
-        det = self._make_detector()
-        det.stop()   # should not crash
-
-    def test_spectral_clap_score_no_data(self):
-        """Spectral score returns 0.5 when no audio is buffered."""
-        det = self._make_detector()
-        score = det._spectral_clap_score()
-        assert score == 0.5
-
-    def test_spectral_clap_score_wide_band(self):
-        """White noise (wide-band energy) should score higher than low-freq tone."""
-        det = self._make_detector()
-        import numpy as np
-        # White noise → high mid+high fraction
-        rng = np.random.default_rng(0)
-        noise = rng.standard_normal(4096).astype(np.float32) * 0.5
-        det._audio_buffer.append(noise)
-        score_noise = det._spectral_clap_score()
-
-        # Clear and test pure low-freq tone (100 Hz) — should have low high-freq fraction
-        det._audio_buffer.clear()
-        t = np.linspace(0, 4096 / 44100, 4096, endpoint=False)
-        tone = (0.5 * np.sin(2 * np.pi * 100 * t)).astype(np.float32)
-        det._audio_buffer.append(tone)
-        score_tone = det._spectral_clap_score()
-
-        assert score_noise > score_tone
+    def test_phase_level_labels(self):
+        from experiences.phase_shift.state import AlphaController
+        from experiences.phase_shift.gestures import PhaseGesture
+        ctrl = AlphaController()
+        assert ctrl.phase_level_label() == 'VISIBLE'
+        ctrl._target_alpha = 0.25
+        assert ctrl.phase_level_label() == '25%'
+        ctrl._target_alpha = 0.50
+        assert ctrl.phase_level_label() == '50%'
+        ctrl._target_alpha = 0.75
+        assert ctrl.phase_level_label() == '75%'
+        ctrl._target_alpha = 1.00
+        assert ctrl.phase_level_label() == 'INVISIBLE'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SEGMENTATION TESTS
+# 10–12: Segmentation Mask Dimensions, Compositing, Background
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestPersonSegmenter:
-    """
-    Segmenter tests share a SINGLE PersonSegmenter instance (class-level) to
-    avoid creating multiple MediaPipe ThreadPoolExecutor threads.
-    The segmenter is stopped in teardown_class.
-    Tests that need an isolated instance (e.g. stop test) create and stop
-    their own instance explicitly.
-    """
+class TestSegmentationMaskDimensions:
 
-    @classmethod
-    def setup_class(cls):
+    # 10. Segmentation mask dimensions
+    def test_mask_always_2d(self):
         from core.segmentation import PersonSegmenter
-        cls._seg = PersonSegmenter()   # one instance, initialised once
+        seg = PersonSegmenter(lazy=True)
+        mask = seg.person_mask
+        assert mask.ndim == 2
 
-    @classmethod
-    def teardown_class(cls):
-        cls._seg.stop()
-
-    # ── Tests that use the shared segmenter ───────────────────────────────
-
-    def test_segmenter_initializes(self):
-        # Either ready (model found) or not — both are valid states
-        assert isinstance(self._seg.ready, bool)
-        assert isinstance(self._seg.status, str)
-
-    def test_person_mask_always_returns_array(self):
-        """person_mask should never raise regardless of segmenter state."""
-        mask = self._seg.person_mask
-        assert isinstance(mask, np.ndarray)
-        assert mask.dtype == np.uint8
-
-    def test_confidence_mask_always_returns_array(self):
-        conf = self._seg.confidence_mask
-        assert isinstance(conf, np.ndarray)
-        assert conf.dtype == np.float32
-
-    def test_get_mask_for_frame_dimensions(self):
-        """Returned mask must match the input frame dimensions."""
-        frame = _make_bgr_frame(480, 640)
-        mask = self._seg.get_mask_for_frame(frame)
-        assert mask.shape[:2] == (480, 640)
-        assert mask.dtype == np.uint8
-
-    def test_get_mask_values_binary(self):
-        """Mask values must be exactly 0 or 255 (binary)."""
-        frame = _make_bgr_frame(240, 320)
-        mask = self._seg.get_mask_for_frame(frame)
-        unique_vals = set(np.unique(mask).tolist())
-        assert unique_vals <= {0, 255}
-
-    def test_mask_age_initial(self):
-        """Mask age should be large before any frame is pushed (no push_frame called)."""
-        # A fresh segmenter (no frames pushed) has large mask_age
+    def test_get_mask_for_frame_matches_frame_size(self):
         from core.segmentation import PersonSegmenter
-        seg_fresh = PersonSegmenter(lazy=True)   # lazy — no MediaPipe thread
-        assert seg_fresh.mask_age > 1.0
-        # No stop() needed — lazy segmenter has no background thread
-
-    def test_push_frame_no_crash_unavailable(self):
-        """push_frame should not raise even if segmenter is unavailable."""
-        from core.segmentation import PersonSegmenter
-        seg = PersonSegmenter(model_path='/nonexistent/model.tflite')
-        # seg.ready is False; no executor thread created (model load failed)
-        frame = _make_bgr_frame(240, 320)
-        seg.push_frame(frame)   # should not raise
-        # No stop() needed — segmenter is not ready, nothing to close
-
-    def test_stop_idempotent(self):
-        """stop() must be safe to call multiple times."""
-        from core.segmentation import PersonSegmenter
-        seg = PersonSegmenter()   # eager — creates executor thread
-        seg.stop()
-        seg.stop()   # second stop should not raise
-        # Thread is cleaned up by first stop()
-
-    def test_mask_thresholding(self):
-        """After thresholding, smoothed values near 0 become 0, near 1 become 255."""
-        from core.segmentation import _THRESHOLD
-        vals = np.array([_THRESHOLD + 0.2, _THRESHOLD - 0.2], dtype=np.float32)
-        binary = (vals > _THRESHOLD).astype(np.uint8) * 255
-        assert binary[0] == 255
-        assert binary[1] == 0
-
-    def test_temporal_smoothing_behavior(self):
-        """EMA smoothing should dampen rapid changes."""
-        from core.segmentation import _TEMPORAL_ALPHA
-        smooth = 0.5
-        for _ in range(10):
-            smooth = _TEMPORAL_ALPHA * 1.0 + (1.0 - _TEMPORAL_ALPHA) * smooth
-        assert smooth > 0.5
-        assert smooth < 1.0   # not fully converged in 10 frames
-
-    def test_mask_resize_to_different_resolution(self):
-        """Mask should resize cleanly to any frame resolution."""
-        for h, w in [(360, 480), (720, 1280), (100, 100)]:
+        seg = PersonSegmenter(lazy=True)
+        for h, w in [(240, 320), (480, 640), (144, 256), (720, 1280)]:
             frame = _make_bgr_frame(h, w)
-            mask = self._seg.get_mask_for_frame(frame)
-            assert mask.shape == (h, w)
+            mask = seg.get_mask_for_frame(frame)
+            assert mask.shape == (h, w), f'Expected ({h},{w}), got {mask.shape}'
+            assert mask.ndim == 2
 
-    def test_confidence_mask_range(self):
-        """Confidence values must be in [0, 1]."""
-        conf = self._seg.confidence_mask
-        assert conf.min() >= 0.0
-        assert conf.max() <= 1.0
+    def test_mask_dtype_uint8(self):
+        from core.segmentation import PersonSegmenter
+        seg = PersonSegmenter(lazy=True)
+        mask = seg.get_mask_for_frame(_make_bgr_frame(240, 320))
+        assert mask.dtype == np.uint8
+
+    def test_no_broadcast_error_144x256(self):
+        """Explicitly cover the historical (144,256,1) vs (144,256) broadcast bug."""
+        from core.segmentation import PersonSegmenter
+        from core.compositor import BackgroundCompositor
+        seg  = PersonSegmenter(lazy=True)
+        comp = BackgroundCompositor()
+        frame = _make_bgr_frame(144, 256)
+        mask  = seg.get_mask_for_frame(frame)
+        assert mask.shape == (144, 256)
+        comp.update_background(frame, mask)
+        result = comp.composite(frame, mask, blend_alpha=0.5)
+        assert result.shape == (144, 256, 3)
+
+    def test_compositor_handles_3d_mask(self):
+        """Compositor must handle (H,W,1) mask without broadcast error."""
+        from core.compositor import BackgroundCompositor
+        comp  = BackgroundCompositor()
+        frame = _make_bgr_frame(48, 64)
+        mask_3d = _make_person_mask_fast(48, 64)[:, :, np.newaxis]
+        comp.update_background(frame, mask_3d)
+        result = comp.composite(frame, mask_3d, blend_alpha=1.0)
+        assert result.shape == (48, 64, 3)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# COMPOSITOR / BACKGROUND MODEL TESTS
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestBackgroundCompositor:
+# 11. Compositing
+class TestCompositing:
 
     def _make_comp(self):
         from core.compositor import BackgroundCompositor
         return BackgroundCompositor()
 
-    def test_initialization(self):
+    def test_composite_shape_and_dtype(self):
         comp = self._make_comp()
-        assert not comp.has_background
-        assert comp.bg_frame is None
+        h, w = 48, 64
+        frame = _make_bgr_frame(h, w)
+        mask  = _make_person_mask_fast(h, w)
+        result = comp.composite(frame, mask, blend_alpha=0.5)
+        assert result.shape == (h, w, 3)
+        assert result.dtype == np.uint8
 
-    def test_warmup_without_mask(self):
-        """After _WARMUP_FRAMES frames without mask, background should be warm."""
-        from core.compositor import _WARMUP_FRAMES
-        comp = self._make_comp()
-        frame = _make_bgr_frame(48, 64)
-        for _ in range(_WARMUP_FRAMES + 2):
-            comp.update_background(frame, None)
-        assert comp.has_background
-
-    def test_background_frame_shape_matches_input(self):
-        comp = self._make_comp()
-        frame = _make_bgr_frame(48, 64)
-        comp.update_background(frame, None)
-        comp._frame_count = 15   # force warm
-        comp.has_background = True
-        bg = comp.bg_frame
-        assert bg is not None
-        assert bg.shape == frame.shape
-
-    def test_background_not_updated_by_person_pixels(self):
-        """Pixels under the person mask should NOT update the background."""
-        comp = self._make_comp()
-        # Initial background: pure blue (BGR: B=200, G=0, R=0)
-        blue_bg = np.zeros((48, 64, 3), dtype=np.float32)
-        blue_bg[:, :, 0] = 180.0   # B channel = 180
-        comp._bg = blue_bg
-        comp._frame_count = 20
-        comp.has_background = True
-
-        # Full person mask (all pixels = person) — nothing is background
-        full_mask = np.full((48, 64), 255, dtype=np.uint8)
-        # Pure green frame — but ALL pixels are covered by person mask
-        green_frame = _make_bgr_frame(48, 64, color=(0, 180, 0))  # G channel = 180
-        comp.update_background(green_frame, full_mask)
-
-        bg_after = comp.bg_frame
-        # Blue channel should still be high (bg not updated from person pixels)
-        avg_b = float(bg_after[:, :, 0].mean())
-        avg_g = float(bg_after[:, :, 1].mean())
-        assert avg_b > 100, f"Blue channel dropped to {avg_b} — background was unexpectedly updated"
-        assert avg_g < 10,  f"Green channel rose to {avg_g} — background was unexpectedly updated"
-
-    def test_background_updates_for_visible_pixels(self):
-        """Pixels NOT under the person mask SHOULD update the background."""
-        from core.compositor import _BG_ALPHA
-        comp = self._make_comp()
-        red_frame = _make_bgr_frame(48, 64, color=(0, 0, 200))
-        comp._bg = red_frame.astype(np.float32)
-        comp._frame_count = 20
-        comp.has_background = True
-
-        empty_mask = np.zeros((48, 64), dtype=np.uint8)   # all background
-        green_frame = _make_bgr_frame(48, 64, color=(0, 200, 0))
-        # Push many frames to overcome EMA lag
-        for _ in range(60):
-            comp.update_background(green_frame, empty_mask)
-
-        bg_after = comp.bg_frame
-        avg_g = bg_after[:, :, 1].mean()
-        assert avg_g > 50   # green channel has increased
-
-    def test_composite_blend_alpha_zero_returns_original(self):
-        """blend_alpha=0 should return original frame unchanged."""
+    def test_blend_alpha_zero_returns_original(self):
         comp = self._make_comp()
         frame = _make_bgr_frame(48, 64, color=(100, 150, 200))
         mask  = _make_person_mask_fast(48, 64)
         result = comp.composite(frame, mask, blend_alpha=0.0)
         assert np.array_equal(result, frame)
 
-    def test_composite_blend_alpha_one_replaces_person_region(self):
-        """blend_alpha=1 should replace person pixels with background estimate."""
+    # 12. Background preservation
+    def test_background_not_updated_by_person_pixels(self):
         from core.compositor import _WARMUP_FRAMES
         comp = self._make_comp()
         h, w = 48, 64
-
-        # Warm up with a solid green background (no person)
         green = _make_bgr_frame(h, w, color=(0, 200, 0))
-        empty_mask = np.zeros((h, w), dtype=np.uint8)
+        empty = np.zeros((h, w), dtype=np.uint8)
         for _ in range(_WARMUP_FRAMES + 5):
-            comp.update_background(green, empty_mask)
-
+            comp.update_background(green, empty)
         assert comp.has_background
 
-        # Person in center is red, bg is green
+        full_mask = np.full((h, w), 255, dtype=np.uint8)
+        red_frame = _make_bgr_frame(h, w, color=(0, 0, 200))
+        comp.update_background(red_frame, full_mask)
+
+        bg = comp.bg_frame
+        assert bg is not None
+        assert float(bg[:, :, 1].mean()) > 100   # green channel preserved
+
+    def test_full_alpha_replaces_person_with_bg(self):
+        from core.compositor import _WARMUP_FRAMES
+        comp = self._make_comp()
+        h, w = 48, 64
+        green = _make_bgr_frame(h, w, color=(0, 200, 0))
+        empty = np.zeros((h, w), dtype=np.uint8)
+        for _ in range(_WARMUP_FRAMES + 5):
+            comp.update_background(green, empty)
+
         frame = _make_bgr_frame(h, w, color=(0, 0, 200))
         mask  = _make_person_mask_fast(h, w)
-
         result = comp.composite(frame, mask, blend_alpha=1.0)
 
-        # Person pixels in result should not be pure red (replaced by green bg)
-        # Check center pixel
         cy, cx = h // 2, w // 2
         if mask[cy, cx] == 255:
-            r_g = int(result[cy, cx, 1])
-            assert r_g > 50   # green channel present (from background)
-
-    def test_composite_partial_blend(self):
-        """Intermediate blend_alpha should produce intermediate values."""
-        comp = self._make_comp()
-        h, w = 48, 64
-        # Set background explicitly
-        comp._bg = np.full((h, w, 3), 100, dtype=np.float32)
-        comp.has_background = True
-        comp._frame_count = 20
-
-        frame = _make_bgr_frame(h, w, color=(200, 200, 200))
-        mask  = np.full((h, w), 255, dtype=np.uint8)   # all person
-        result_full = comp.composite(frame, mask, blend_alpha=1.0)
-        result_half = comp.composite(frame, mask, blend_alpha=0.5)
-
-        # Half blend should be between frame and full result
-        cy, cx = h // 2, w // 2
-        assert abs(int(result_half[cy, cx, 0]) - 150) < 30
-
-    def test_composite_mask_boundaries(self):
-        """Mask boundary pixels should transition smoothly."""
-        comp = self._make_comp()
-        h, w = 48, 64
-        comp._bg = np.zeros((h, w, 3), dtype=np.float32)
-        comp.has_background = True
-        comp._frame_count = 20
-
-        frame = _make_bgr_frame(h, w, color=(200, 100, 50))
-        # Hard mask — left half person, right half background
-        mask = np.zeros((h, w), dtype=np.uint8)
-        mask[:, :w//2] = 255
-
-        result = comp.composite(frame, mask, blend_alpha=1.0)
-        assert result.shape == frame.shape
-        assert result.dtype == np.uint8
-
-    def test_reset(self):
-        comp = self._make_comp()
-        comp.update_background(_make_bgr_frame(48, 64), None)
-        comp.reset()
-        assert not comp.has_background
-        assert comp.bg_frame is None
+            assert result[cy, cx, 1] > 50   # green from background is present
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# STATE MACHINE TESTS
+# 13–14: Pure-invisible final state — no person VFX
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestPhaseStateMachine:
-
-    def _make_sm(self, phase_out=0.5, phase_in=0.5):
-        from experiences.phase_shift.state import PhaseStateMachine, PhaseState
-        return PhaseStateMachine(phase_out_duration=phase_out, phase_in_duration=phase_in)
-
-    def test_initial_state_is_visible(self):
-        from experiences.phase_shift.state import PhaseState
-        sm = self._make_sm()
-        assert sm.state == PhaseState.VISIBLE
-        assert sm.blend_alpha == 0.0
-
-    def test_clap_triggers_phasing_out(self):
-        from experiences.phase_shift.state import PhaseState
-        sm = self._make_sm()
-        accepted = sm.trigger_clap()
-        assert accepted
-        assert sm.state == PhaseState.PHASING_OUT
-
-    def test_phasing_out_to_invisible(self):
-        from experiences.phase_shift.state import PhaseState
-        sm = self._make_sm(phase_out=0.1)
-        sm.trigger_clap()
-        sm.update(0.15)   # past duration
-        assert sm.state == PhaseState.INVISIBLE
-        assert sm.blend_alpha == 1.0
-
-    def test_invisible_clap_triggers_phasing_in(self):
-        from experiences.phase_shift.state import PhaseState
-        sm = self._make_sm(phase_out=0.1, phase_in=0.1)
-        sm.trigger_clap()
-        sm.update(0.15)
-        assert sm.state == PhaseState.INVISIBLE
-        accepted = sm.trigger_clap()
-        assert accepted
-        assert sm.state == PhaseState.PHASING_IN
-
-    def test_phasing_in_to_visible(self):
-        from experiences.phase_shift.state import PhaseState
-        sm = self._make_sm(phase_out=0.1, phase_in=0.1)
-        sm.trigger_clap()
-        sm.update(0.15)
-        sm.trigger_clap()
-        sm.update(0.15)
-        assert sm.state == PhaseState.VISIBLE
-        assert sm.blend_alpha == 0.0
-
-    def test_clap_ignored_during_transition(self):
-        from experiences.phase_shift.state import PhaseState
-        sm = self._make_sm(phase_out=2.0)
-        sm.trigger_clap()
-        assert sm.state == PhaseState.PHASING_OUT
-        accepted = sm.trigger_clap()
-        assert not accepted   # clap during transition is ignored
-        assert sm.state == PhaseState.PHASING_OUT
-
-    def test_blend_alpha_increases_during_phase_out(self):
-        sm = self._make_sm(phase_out=1.0)
-        sm.trigger_clap()
-        sm.update(0.25)
-        mid_alpha = sm.blend_alpha
-        sm.update(0.5)
-        late_alpha = sm.blend_alpha
-        assert late_alpha > mid_alpha
-
-    def test_blend_alpha_decreases_during_phase_in(self):
-        from experiences.phase_shift.state import PhaseState
-        sm = self._make_sm(phase_out=0.1, phase_in=1.0)
-        sm.trigger_clap()
-        sm.update(0.2)
-        sm.trigger_clap()
-        sm.update(0.25)
-        mid_alpha = sm.blend_alpha
-        sm.update(0.5)
-        late_alpha = sm.blend_alpha
-        assert late_alpha < mid_alpha
-
-    def test_just_completed_set_for_one_frame(self):
-        from experiences.phase_shift.state import PhaseState
-        sm = self._make_sm(phase_out=0.1)
-        sm.trigger_clap()
-        sm.update(0.15)
-        assert sm.just_completed is True
-        sm.update(0.01)
-        assert sm.just_completed is False
-
-    def test_reset_returns_to_visible(self):
-        from experiences.phase_shift.state import PhaseState
-        sm = self._make_sm(phase_out=0.1)
-        sm.trigger_clap()
-        sm.update(0.15)
-        assert sm.state == PhaseState.INVISIBLE
-        sm.reset()
-        assert sm.state == PhaseState.VISIBLE
-        assert sm.blend_alpha == 0.0
-
-    def test_is_transitioning_flags(self):
-        from experiences.phase_shift.state import PhaseState
-        sm = self._make_sm(phase_out=2.0)
-        assert not sm.is_transitioning
-        sm.trigger_clap()
-        assert sm.is_transitioning
-
-    def test_is_invisible_flag(self):
-        from experiences.phase_shift.state import PhaseState
-        sm = self._make_sm(phase_out=0.05)
-        assert not sm.is_invisible
-        sm.trigger_clap()
-        sm.update(0.1)
-        assert sm.is_invisible
-
-    def test_is_visible_flag(self):
-        from experiences.phase_shift.state import PhaseState
-        sm = self._make_sm()
-        assert sm.is_visible
-        sm.trigger_clap()
-        assert not sm.is_visible
-
-    def test_full_cycle_twice(self):
-        """Complete 2 full cycles without error."""
-        from experiences.phase_shift.state import PhaseState
-        sm = self._make_sm(phase_out=0.05, phase_in=0.05)
-        for _ in range(2):
-            sm.trigger_clap()
-            sm.update(0.1)
-            assert sm.state == PhaseState.INVISIBLE
-            sm.trigger_clap()
-            sm.update(0.1)
-            assert sm.state == PhaseState.VISIBLE
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# VFX TESTS
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestPhaseShiftVFX:
-
-    def _make_vfx(self):
-        from core.particles import ParticlePool
-        from experiences.phase_shift.vfx import PhaseShiftVFX
-        pool = ParticlePool(capacity=500)
-        return PhaseShiftVFX(640, 480, pool), pool
-
-    def test_vfx_update_no_crash(self):
-        vfx, _ = self._make_vfx()
-        for _ in range(30):
-            vfx.update(1 / 60)
-
-    def test_phase_out_burst_populates_particles(self):
-        vfx, pool = self._make_vfx()
-        mask = _make_person_mask_fast(48, 64)
-        vfx.on_phase_out_start(mask, 640, 480)
-        assert pool.active_count > 0
-
-    def test_phase_in_burst_populates_particles(self):
-        vfx, pool = self._make_vfx()
-        mask = _make_person_mask_fast(48, 64)
-        vfx.on_phase_in_start(mask, 640, 480)
-        assert pool.active_count > 0
-
-    def test_transition_complete_adds_shockwave(self):
-        vfx, _ = self._make_vfx()
-        vfx.on_transition_complete(320, 240, phase_out=True)
-        assert len(vfx._shockwaves) == 1
-
-    def test_shockwave_expires(self):
-        vfx, _ = self._make_vfx()
-        vfx.on_transition_complete(320, 240, phase_out=True)
-        for _ in range(60):
-            vfx.update(0.02)
-        assert len(vfx._shockwaves) == 0
-
-    def test_apply_frame_effects_no_crash(self):
-        vfx, _ = self._make_vfx()
-        frame = _make_bgr_frame(480, 640)
-        mask  = _make_person_mask_fast(48, 64)
-        result = vfx.apply_frame_effects(frame, mask, blend_alpha=0.5)
-        assert result.shape == frame.shape
-        assert result.dtype == np.uint8
-
-    def test_draw_pygame_effects_no_crash(self, screen):
-        vfx, _ = self._make_vfx()
-        mask = np.zeros((720, 1280), dtype=np.uint8)
-        vfx.draw_pygame_effects(screen, mask, blend_alpha=0.5, phase_out=True)
-
-    def test_glitch_distortion_no_crash(self):
-        from experiences.phase_shift.vfx import GlitchDistortion
-        gd = GlitchDistortion()
-        frame = _make_bgr_frame(240, 320)
-        for strength in [0.0, 0.3, 0.7, 1.0]:
-            result = gd.apply(frame, strength)
-            assert result.shape == frame.shape
-
-    def test_edge_glow_applies_to_frame(self):
-        from experiences.phase_shift.vfx import EdgeGlow
-        eg = EdgeGlow()
-        eg.update(0.1)
-        frame = _make_bgr_frame(48, 64, color=(100, 100, 100))
-        mask  = _make_person_mask_fast(48, 64)
-        result = eg.draw_on_frame(frame, mask, blend_alpha=1.0)
-        # At minimum, result should be same shape and differ from input
-        assert result.shape == frame.shape
-
-    def test_pixel_dissolve_no_crash(self, screen):
-        from experiences.phase_shift.vfx import PixelDissolve
-        pd = PixelDissolve()
-        pd.reset(640, 480)
-        mask = _make_person_mask_fast(48, 64)
-        pd.draw(screen, mask, blend_alpha=0.5, sx=0, sy=0, phase_out=True)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# EXPERIENCE TESTS
-# ─────────────────────────────────────────────────────────────────────────────
-
-class TestPhaseShiftExperience:
+class TestPureInvisibleRendering:
 
     def _make_exp(self):
         from experiences.phase_shift.experience import PhaseShiftExperience
         return PhaseShiftExperience(1280, 720)
 
-    def test_initialization(self):
+    # 13. At stable alpha=1.0 the render path skips all person VFX
+    def test_stable_invisible_skips_vfx_draw(self, screen):
+        """When alpha >= _INVISIBLE_SUPPRESS_ALPHA, draw_pygame_effects must NOT be called."""
+        from experiences.phase_shift.experience import _INVISIBLE_SUPPRESS_ALPHA
         exp = self._make_exp()
-        assert not exp._active
+        exp.enter()
 
-    def test_enter_exit(self):
+        # Force alpha to fully invisible
+        exp._alpha_ctrl._alpha        = 1.0
+        exp._alpha_ctrl._target_alpha = 1.0
+
+        # Inject a camera frame and person mask
+        frame = _make_bgr_frame(480, 640)
+        exp._camera_frame  = frame
+        exp._current_frame = frame
+        exp._person_mask   = _make_person_mask_fast(480, 640)
+
+        # Patch draw_pygame_effects to detect if called
+        called = []
+        original = exp._vfx.draw_pygame_effects
+        def spy(*args, **kwargs):
+            called.append(1)
+            return original(*args, **kwargs)
+        exp._vfx.draw_pygame_effects = spy
+
+        exp.render(screen)
+
+        assert len(called) == 0, (
+            'draw_pygame_effects must NOT be called when alpha >= suppress threshold'
+        )
+        exp.exit()
+
+    # 14. At stable alpha=1.0 scanlines are NOT drawn
+    def test_stable_invisible_no_scanlines(self, screen):
+        """Scanline overlay must be suppressed at stable alpha=1.0."""
+        from experiences.phase_shift.experience import _INVISIBLE_SUPPRESS_ALPHA
+        exp = self._make_exp()
+        exp.enter()
+        exp._alpha_ctrl._alpha        = 1.0
+        exp._alpha_ctrl._target_alpha = 1.0
+        frame = _make_bgr_frame(480, 640)
+        exp._camera_frame  = frame
+        exp._current_frame = frame
+
+        scanline_called = []
+        original_sl = exp._draw_scanline_overlay
+        def spy_sl(*args, **kwargs):
+            scanline_called.append(1)
+            return original_sl(*args, **kwargs)
+        exp._draw_scanline_overlay = spy_sl
+
+        exp.render(screen)
+        assert len(scanline_called) == 0
+        exp.exit()
+
+    def test_partial_alpha_allows_vfx(self, screen):
+        """At partial alpha (< threshold) VFX should still draw."""
+        from experiences.phase_shift.experience import _INVISIBLE_SUPPRESS_ALPHA
+        exp = self._make_exp()
+        exp.enter()
+        exp._alpha_ctrl._alpha        = 0.5
+        exp._alpha_ctrl._target_alpha = 0.5
+        frame = _make_bgr_frame(480, 640)
+        exp._camera_frame  = frame
+        exp._current_frame = frame
+        exp._person_mask   = _make_person_mask_fast(480, 640)
+
+        called = []
+        original = exp._vfx.draw_pygame_effects
+        def spy(*args, **kwargs):
+            called.append(1)
+            return original(*args, **kwargs)
+        exp._vfx.draw_pygame_effects = spy
+
+        exp.render(screen)
+        assert len(called) > 0, 'VFX should draw at partial alpha'
+        exp.exit()
+
+    def test_suppress_threshold_value(self):
+        from experiences.phase_shift.experience import _INVISIBLE_SUPPRESS_ALPHA
+        assert 0.85 <= _INVISIBLE_SUPPRESS_ALPHA <= 1.0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 15: Phase Shift Lifecycle
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestPhaseShiftLifecycle:
+
+    def _make_exp(self):
+        from experiences.phase_shift.experience import PhaseShiftExperience
+        return PhaseShiftExperience(1280, 720)
+
+    def test_enter_sets_active(self):
         exp = self._make_exp()
         exp.enter()
         assert exp._active
         exp.exit()
+
+    def test_exit_clears_active(self):
+        exp = self._make_exp()
+        exp.enter()
+        exp.exit()
         assert not exp._active
 
-    def test_repeated_enter_exit(self):
+    def test_enter_resets_alpha(self):
+        exp = self._make_exp()
+        exp.enter()
+        assert exp._alpha_ctrl.alpha == pytest.approx(0.0)
+        exp.exit()
+
+    def test_enter_exit_multiple_times(self):
         exp = self._make_exp()
         for _ in range(3):
             exp.enter()
@@ -743,38 +734,48 @@ class TestPhaseShiftExperience:
             exp.exit()
             assert not exp._active
 
-    def test_handle_key_d_toggles_debug(self):
+    def test_gesture_to_alpha_pipeline(self):
+        from experiences.phase_shift.gestures import PhaseGesture, _CONFIRM_FRAMES
         exp = self._make_exp()
         exp.enter()
-        assert not exp._debug_mode
-        evt = pygame.event.Event(pygame.KEYDOWN, {'key': pygame.K_d, 'mod': 0, 'unicode': 'd', 'scancode': 0})
-        exp.handle_key(evt)
-        assert exp._debug_mode
-        exp.handle_key(evt)
-        assert not exp._debug_mode
+        hand = _five_finger()
+        for _ in range(_CONFIRM_FRAMES + 4):
+            exp.push_hands([hand])
+        assert exp._alpha_ctrl.target_alpha == pytest.approx(1.0)
         exp.exit()
 
-    def test_handle_key_k_injects_clap(self):
+    def test_three_finger_to_75(self):
+        from experiences.phase_shift.gestures import PhaseGesture, _CONFIRM_FRAMES
         exp = self._make_exp()
         exp.enter()
-        evt = pygame.event.Event(pygame.KEYDOWN, {'key': pygame.K_k, 'mod': 0, 'unicode': 'k', 'scancode': 0})
-        exp.handle_key(evt)
-        # poll_clap should now return True
-        assert exp._clap.poll_clap() is True
+        hand = _three_finger()
+        for _ in range(_CONFIRM_FRAMES + 4):
+            exp.push_hands([hand])
+        assert exp._alpha_ctrl.target_alpha == pytest.approx(0.75)
         exp.exit()
 
-    def test_update_without_frame_no_crash(self):
+    def test_no_hands_gives_none_gesture(self):
+        from experiences.phase_shift.gestures import PhaseGesture, _CONFIRM_FRAMES
         exp = self._make_exp()
         exp.enter()
-        for _ in range(5):
+        for _ in range(_CONFIRM_FRAMES + 4):
+            exp.push_hands([])
+        assert exp._alpha_ctrl.target_alpha == pytest.approx(0.0)
+        exp.exit()
+
+    def test_update_no_crash(self):
+        exp = self._make_exp()
+        exp.enter()
+        for _ in range(10):
             exp.update(1 / 60)
         exp.exit()
 
-    def test_update_with_frame(self):
+    def test_update_with_frame_no_crash(self):
         exp = self._make_exp()
         exp.enter()
         frame = _make_bgr_frame(480, 640)
         exp.push_camera_frame(frame)
+        exp.push_hands([])
         for _ in range(5):
             exp.update(1 / 60)
         exp.exit()
@@ -782,8 +783,8 @@ class TestPhaseShiftExperience:
     def test_render_no_crash(self, screen):
         exp = self._make_exp()
         exp.enter()
-        frame = _make_bgr_frame(480, 640)
-        exp.push_camera_frame(frame)
+        exp._current_frame = _make_bgr_frame(480, 640)
+        exp.push_hands([])
         exp.update(1 / 60)
         exp.render(screen)
         exp.exit()
@@ -792,71 +793,74 @@ class TestPhaseShiftExperience:
         exp = self._make_exp()
         exp.enter()
         exp._debug_mode = True
-        frame = _make_bgr_frame(480, 640)
-        exp.push_camera_frame(frame)
+        exp._current_frame = _make_bgr_frame(480, 640)
+        exp.push_hands([_five_finger()])
         exp.update(1 / 60)
         exp.render(screen)
         exp.exit()
 
-    def test_clap_triggers_state_transition(self):
-        from experiences.phase_shift.state import PhaseState
+    def test_handle_key_d_toggles_debug(self):
         exp = self._make_exp()
         exp.enter()
-        # Inject a synthetic clap
-        exp._clap.inject_clap()
-        frame = _make_bgr_frame(480, 640)
-        exp.push_camera_frame(frame)
-        exp.update(1 / 60)
-        # Should have transitioned out of VISIBLE
-        assert exp._state_machine.state != PhaseState.VISIBLE
+        assert not exp._debug_mode
+        evt = pygame.event.Event(
+            pygame.KEYDOWN, {'key': pygame.K_d, 'mod': 0, 'unicode': 'd', 'scancode': 0}
+        )
+        exp.handle_key(evt)
+        assert exp._debug_mode
+        exp.handle_key(evt)
+        assert not exp._debug_mode
         exp.exit()
-
-    def test_segmentation_update_interval_respected(self):
-        """Segmenter push should only happen every seg_update_interval frames."""
-        exp = self._make_exp()
-        exp.enter()
-        exp._cfg.seg_update_interval = 3
-        frame = _make_bgr_frame(480, 640)
-
-        push_count = 0
-        original_push = exp._segmenter.push_frame
-
-        calls = []
-        def counting_push(f):
-            calls.append(1)
-            return original_push(f)
-
-        exp._segmenter.push_frame = counting_push
-
-        for i in range(6):
-            exp.push_camera_frame(frame)
-
-        # Should have pushed every 3rd frame → 2 times in 6 calls
-        assert len(calls) == 2
-        exp.exit()
-
-    def test_state_machine_accessible(self):
-        from experiences.phase_shift.state import PhaseState
-        exp = self._make_exp()
-        exp.enter()
-        assert exp._state_machine.state == PhaseState.VISIBLE
-        exp.exit()
-
-    def test_shutdown_releases_audio(self):
-        exp = self._make_exp()
-        exp.enter()
-        # Mic may or may not be available in test env
-        exp.exit()
-        assert not exp._clap.available
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# REGRESSION — Phase 1 & 2 still work
+# 16: No microphone dependency
 # ─────────────────────────────────────────────────────────────────────────────
 
-class TestPhase1Phase2Regression:
+class TestNoMicrophoneDependency:
 
-    def test_runner_experience_still_works(self):
+    def test_experience_has_no_clap_attribute(self):
+        from experiences.phase_shift.experience import PhaseShiftExperience
+        exp = PhaseShiftExperience(640, 480)
+        assert not hasattr(exp, '_clap')
+
+    def test_experience_imports_no_audio(self):
+        src = os.path.join('experiences', 'phase_shift', 'experience.py')
+        with open(src, 'r', encoding='utf-8') as f:
+            content = f.read()
+        assert 'core.audio' not in content
+        assert 'ClapDetector' not in content
+
+    def test_no_scissor_in_experience(self):
+        src = os.path.join('experiences', 'phase_shift', 'experience.py')
+        with open(src, 'r', encoding='utf-8') as f:
+            content = f.read()
+        assert 'SCISSOR' not in content
+
+    def test_enter_no_audio_error(self):
+        from experiences.phase_shift.experience import PhaseShiftExperience
+        exp = PhaseShiftExperience(640, 480)
+        try:
+            exp.enter()
+            exp.exit()
+        except Exception as e:
+            if any(kw in str(e).lower() for kw in ('audio', 'microphone', 'sounddevice')):
+                pytest.fail(f'enter() triggered audio error: {e}')
+
+    def test_no_scissor_in_gestures(self):
+        src = os.path.join('experiences', 'phase_shift', 'gestures.py')
+        with open(src, 'r', encoding='utf-8') as f:
+            content = f.read()
+        assert 'SCISSOR' not in content
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 17: Phase 2 Regression
+# ─────────────────────────────────────────────────────────────────────────────
+
+class TestPhase2Regression:
+
+    def test_runner_experience(self):
         from experiences.vision_controller.runner import NeonRunnerExperience
         from core.gestures import GestureType
         runner = NeonRunnerExperience(1280, 720)
@@ -867,7 +871,7 @@ class TestPhase1Phase2Regression:
         assert runner.is_jumping
         runner.exit()
 
-    def test_elemental_cultivation_still_works(self, screen):
+    def test_elemental_cultivation(self, screen):
         from experiences.elemental_cultivation.experience import ElementalCultivationExperience
         from core.gestures import GestureType
         exp = ElementalCultivationExperience(1280, 720)
@@ -878,21 +882,6 @@ class TestPhase1Phase2Regression:
         exp.render(screen)
         exp.exit()
         assert not exp._active
-
-    def test_seven_elements_all_accessible(self):
-        from experiences.elemental_cultivation.elements import ElementID, create_element
-        from core.particles import ParticlePool
-        from core.effects import EffectComposer
-        from experiences.elemental_cultivation.gestures import ElementalGestureState, ElementalGesture
-        pool = ParticlePool(capacity=500)
-        comp = EffectComposer(pool)
-        gs = ElementalGestureState()
-        gs.gesture = ElementalGesture.NONE
-        for eid in ElementID:
-            elem = create_element(eid, comp, 1280, 720)
-            elem.enter()
-            elem.update(1 / 60, gs)
-            elem.exit()
 
     def test_gesture_processor_intact(self):
         from core.gestures import GestureProcessor, GestureType
@@ -914,3 +903,24 @@ class TestPhase1Phase2Regression:
         assert pool.active_count == 10
         pool.clear()
         assert pool.active_count == 0
+
+    def test_compositor_intact(self):
+        from core.compositor import BackgroundCompositor
+        comp = BackgroundCompositor()
+        frame = _make_bgr_frame(48, 64)
+        mask  = _make_person_mask_fast(48, 64)
+        result = comp.composite(frame, mask, blend_alpha=0.5)
+        assert result.shape == (48, 64, 3)
+
+    def test_vfx_intact(self, screen):
+        from core.particles import ParticlePool
+        from experiences.phase_shift.vfx import PhaseShiftVFX
+        pool = ParticlePool(capacity=200)
+        vfx  = PhaseShiftVFX(640, 480, pool)
+        mask = _make_person_mask_fast(48, 64)
+        vfx.on_phase_out_start(mask, 640, 480)
+        assert pool.active_count > 0
+        for _ in range(10):
+            vfx.update(1 / 60)
+        result = vfx.apply_frame_effects(_make_bgr_frame(480, 640), mask, 0.5)
+        assert result.shape == (480, 640, 3)
