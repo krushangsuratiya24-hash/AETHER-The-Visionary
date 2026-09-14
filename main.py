@@ -18,13 +18,37 @@ class AetherApp:
     and modular experience switching.
     """
     def __init__(self):
-        # 1. Initialize Pygame Video & Audio
+        # 0. Ensure SDL2 centers the window on monitor
+        import os
+        os.environ['SDL_VIDEO_CENTERED'] = '1'
+
+        # 1. Initialize Pygame Display Subsystem
         pygame.init()
+        if not pygame.display.get_init():
+            pygame.display.init()
+
         pygame.display.set_caption(display_config.window_title)
-        flags = pygame.DOUBLEBUF
+        
+        # Clean display flags: Use standard window flags (avoid DOUBLEBUF without OPENGL)
+        flags = 0
         if display_config.fullscreen:
             flags |= pygame.FULLSCREEN
+
         self.screen = pygame.display.set_mode((display_config.width, display_config.height), flags)
+        if self.screen is None:
+            raise RuntimeError("[AETHER] Failed to create a valid Pygame display surface.")
+
+        # Immediate paint & event pump so the OS window manager registers and paints the window immediately
+        self.screen.fill(palette.VOID_DARK)
+        pygame.display.flip()
+        pygame.event.pump()
+
+        # Bring window to foreground and ensure visibility on Windows
+        self._ensure_window_foreground()
+
+        # Show immediate startup feedback so user sees the window is active while loading
+        self._render_splash_screen("AETHER // INITIALIZING OPTICAL SENSORS...")
+
         self.clock = pygame.time.Clock()
         self.running = True
         
@@ -56,6 +80,35 @@ class AetherApp:
         self.font_card_desc = pygame.font.SysFont('Consolas', 14)
         self.font_badge = pygame.font.SysFont('Consolas', 12, bold=True)
         self.font_instr = pygame.font.SysFont('Consolas', 15)
+
+    def _ensure_window_foreground(self):
+        """Ensures the Pygame window is visible, restored, and brought to the foreground on Windows."""
+        if sys.platform == 'win32':
+            try:
+                import ctypes
+                wm_info = pygame.display.get_wm_info()
+                hwnd = wm_info.get('window') if wm_info else None
+                if hwnd:
+                    user32 = ctypes.windll.user32
+                    user32.ShowWindow(hwnd, 9)  # SW_RESTORE (9)
+                    user32.ShowWindow(hwnd, 5)  # SW_SHOW (5)
+                    user32.BringWindowToTop(hwnd)
+                    user32.SetForegroundWindow(hwnd)
+            except Exception as e:
+                print(f'[AETHER] Window foreground notice: {e}')
+
+    def _render_splash_screen(self, message: str):
+        """Renders an immediate visual feedback screen during initialization."""
+        self.screen.fill(palette.VOID_DARK)
+        try:
+            splash_font = pygame.font.SysFont('Consolas', 24, bold=True)
+            txt = splash_font.render(message, True, palette.CYAN_NEON)
+            self.screen.blit(txt, (display_config.width // 2 - txt.get_width() // 2,
+                                   display_config.height // 2 - txt.get_height() // 2))
+        except Exception:
+            pass
+        pygame.display.flip()
+        pygame.event.pump()
 
     def run(self):
         print('[AETHER] Entering Main Exhibition Loop.')
