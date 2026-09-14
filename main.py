@@ -13,6 +13,7 @@ from core.gestures import GestureProcessor, GestureType
 from core.ui import HUD
 from experiences.vision_controller.runner import NeonRunnerExperience
 from experiences.elemental_cultivation import ElementalCultivationExperience
+from experiences.phase_shift import PhaseShiftExperience
 
 
 class AetherApp:
@@ -109,7 +110,7 @@ class AetherApp:
         self.clock = pygame.time.Clock()
         self.running = True
 
-        # App state: 'LOADING' | 'MENU' | 'VISION_CONTROLLER' | 'ELEMENTAL_CULTIVATION'
+        # App state: 'LOADING' | 'MENU' | 'VISION_CONTROLLER' | 'ELEMENTAL_CULTIVATION' | 'PHASE_SHIFT'
         self.mode = 'LOADING'
         self.debug_mode = False
 
@@ -133,6 +134,7 @@ class AetherApp:
         self.hud: 'HUD | None' = None
         self.runner_experience: 'NeonRunnerExperience | None' = None
         self.elemental_experience: 'ElementalCultivationExperience | None' = None
+        self.phase_shift_experience: 'PhaseShiftExperience | None' = None
 
         self._init_error: str | None = None
         self._init_status: str = 'Starting...'
@@ -176,6 +178,10 @@ class AetherApp:
 
             elemental = ElementalCultivationExperience(display_config.width, display_config.height)
             self.elemental_experience = elemental
+
+            self._init_status = 'Loading Phase Shift...'
+            phase_shift = PhaseShiftExperience(display_config.width, display_config.height)
+            self.phase_shift_experience = phase_shift
 
             # HUD must be created here but uses existing screen — that is fine
             # because we only blit to the screen from the main thread.
@@ -297,9 +303,16 @@ class AetherApp:
                     self.elemental_experience.handle_hands(hands)
                     self.elemental_experience.handle_gesture(current_gesture, active_action, norm_pos)
                     self.elemental_experience.update(dt)
+                elif self.mode == 'PHASE_SHIFT' and self.phase_shift_experience is not None:
+                    # Phase Shift: push camera frame, then update
+                    if ret and frame is not None:
+                        self.phase_shift_experience.push_camera_frame(frame)
+                    self.phase_shift_experience.update(dt)
 
                 # ── 5. Render Pipeline ────────────────────────────────────────
-                self.screen.fill(palette.VOID_DARK)
+                # Phase Shift renders the full composited frame itself — no fill needed
+                if self.mode != 'PHASE_SHIFT':
+                    self.screen.fill(palette.VOID_DARK)
 
                 if self.mode == 'MENU':
                     self._render_master_menu(norm_pos, hands)
@@ -307,9 +320,12 @@ class AetherApp:
                     self.runner_experience.render(self.screen)
                 elif self.mode == 'ELEMENTAL_CULTIVATION' and self.elemental_experience is not None:
                     self.elemental_experience.render(self.screen)
+                elif self.mode == 'PHASE_SHIFT' and self.phase_shift_experience is not None:
+                    self.phase_shift_experience.render(self.screen)
 
                 # ── 6. Composite HUD Overlays ─────────────────────────────────
-                if self.hud is not None:
+                # Phase Shift draws its own HUD; skip global HUD for that mode
+                if self.hud is not None and self.mode != 'PHASE_SHIFT':
                     is_mock = self.camera.is_mock if self.camera else True
                     mode_labels = {
                         'MENU': 'MAIN HUB',
@@ -324,7 +340,8 @@ class AetherApp:
                         self.hud.draw_gesture_card(current_gesture, active_action)
 
                 # ── 7. Camera PIP ─────────────────────────────────────────────
-                if frame is not None:
+                # Phase Shift uses the full-frame composited view — no PIP needed
+                if frame is not None and self.mode not in ('PHASE_SHIFT',):
                     self._render_camera_pip(frame)
 
                 # ── 8. Debug Telemetry ────────────────────────────────────────
@@ -378,6 +395,10 @@ class AetherApp:
                         if self.elemental_experience:
                             self.elemental_experience.exit()
                         self.mode = 'MENU'
+                    elif self.mode == 'PHASE_SHIFT':
+                        if self.phase_shift_experience:
+                            self.phase_shift_experience.exit()
+                        self.mode = 'MENU'
                     elif self.mode == 'MENU':
                         self.running = False
                     continue
@@ -388,10 +409,14 @@ class AetherApp:
                         self._enter_vision_controller()
                     elif event.key == pygame.K_2:
                         self._enter_elemental_cultivation()
+                    elif event.key == pygame.K_3:
+                        self._enter_phase_shift()
                 elif self.mode == 'VISION_CONTROLLER' and self.runner_experience:
                     self.runner_experience.handle_key(event)
                 elif self.mode == 'ELEMENTAL_CULTIVATION' and self.elemental_experience:
                     self.elemental_experience.handle_key(event)
+                elif self.mode == 'PHASE_SHIFT' and self.phase_shift_experience:
+                    self.phase_shift_experience.handle_key(event)
 
     def _enter_vision_controller(self):
         if self.runner_experience is None:
@@ -404,6 +429,12 @@ class AetherApp:
             return
         self.mode = 'ELEMENTAL_CULTIVATION'
         self.elemental_experience.enter()
+
+    def _enter_phase_shift(self):
+        if self.phase_shift_experience is None:
+            return
+        self.mode = 'PHASE_SHIFT'
+        self.phase_shift_experience.enter()
 
     # ─────────────────────────────────────────────────────────────────────────
     # Rendering Helpers
@@ -491,12 +522,12 @@ class AetherApp:
             {
                 'key': '3',
                 'title': 'PHASE SHIFT',
-                'subtitle': 'Clap Acoustic Trigger Predator Cloaking',
-                'status': 'LOCKED — PHASE 3',
-                'active': False,
-                'color': palette.LOCKED_GRAY,
-                'border': palette.BORDER_DIM,
-                'action': None,
+                'subtitle': 'Clap Real-time Invisibility Segmentation',
+                'status': 'READY // UNLOCKED',
+                'active': True,
+                'color': (0, 220, 255),
+                'border': (0, 220, 255),
+                'action': '3',
             },
             {
                 'key': '4',
@@ -565,7 +596,7 @@ class AetherApp:
             self.screen.blit(card_surf, (x, card_y))
 
         footer_txt = self.font_instr.render(
-            'Hotkeys: [1] Vision Controller  [2] Elemental Cultivation  |  [D] Debug  |  [ESC] Exit',
+            'Hotkeys: [1] Vision Controller  [2] Elemental Cultivation  [3] Phase Shift  |  [D] Debug  |  [ESC] Exit',
             True, palette.TEXT_MUTED
         )
         self.screen.blit(footer_txt, (cx - footer_txt.get_width() // 2, h - 38))
@@ -598,6 +629,8 @@ class AetherApp:
             self.runner_experience.exit()
         if self.elemental_experience:
             self.elemental_experience.exit()
+        if self.phase_shift_experience:
+            self.phase_shift_experience.exit()
         if self.camera:
             self.camera.release()
         pygame.quit()
