@@ -8,7 +8,7 @@
 [![Pygame-CE](https://img.shields.io/badge/Engine-Pygame--CE%202.5-FFD700?style=for-the-badge&logo=python&logoColor=black)](https://pyga.me/)
 [![License](https://img.shields.io/badge/License-MIT-00FF66?style=for-the-badge)](LICENSE)
 
-**AETHER — The Visionary** is an exhibition-grade Computer Vision suite engineered for high-impact live interactive demonstrations. By merging sub-millisecond optical hand tracking, temporal gesture filtering, and real-time GPU/CPU rendering, AETHER eliminates traditional input hardware, turning human gesture dynamics directly into virtual interaction.
+**AETHER — The Visionary** is an exhibition-grade Computer Vision suite engineered for high-impact live interactive demonstrations. By merging sub-millisecond optical hand tracking, temporal gesture filtering, and real-time CPU rendering, AETHER eliminates traditional input hardware, turning human gesture dynamics directly into virtual interaction.
 
 ---
 
@@ -17,7 +17,7 @@
 | Phase | Experience | Status | Description |
 | :---: | :--- | :---: | :--- |
 | **01** | **🎮 VISION CONTROLLER** | **READY // UNLOCKED** | Full hand-gesture-driven endless 3D arcade cyber-runner with zero-latency controls. |
-| **02** | **🔥 ELEMENTAL CULTIVATION** | *LOCKED (PHASE 2)* | 7-Element real-time particle VFX engine driven by mudras and hand stances. |
+| **02** | **🔥 ELEMENTAL CULTIVATION** | **READY // UNLOCKED** | 7-Element real-time particle VFX engine driven by mudras and hand stances. |
 | **03** | **👻 PHASE SHIFT** | *LOCKED (PHASE 3)* | Acoustic transient clap detection + person segmentation for optical cloaking. |
 | **04** | **🌀 REALITY SCULPTOR** | *LOCKED (PHASE 4)* | Spatial 6-DOF 2D & 3D wireframe mesh manipulation (grab, rotate, scale, clone). |
 
@@ -42,6 +42,80 @@ The first operational experience in AETHER is **Neon Runner**, a high-octane 3D 
 
 ---
 
+## 🔥 Phase 2: Elemental Cultivation (Operational)
+
+**Elemental Cultivation** is a real-time interactive particle VFX experience where the user's hands directly sculpt elemental energy fields rendered in the Pygame window. Seven distinct elemental disciplines are implemented, each with a unique visual identity powered by a modular VFX engine.
+
+### Seven Elemental Disciplines
+
+| Key | Element | Visual Identity |
+| :---: | :--- | :--- |
+| `1` | 🔥 **PHOENIX FLAME** | Rising flames, embers, fire trails, heat shimmer, explosive bursts |
+| `2` | ☀️ **GOLDEN SOLAR** | Radial rays, orbiting particles, pulsing solar core, orbit rings |
+| `3` | ❄️ **FROST** | Ice shards, crystalline fragments, frosty aura, radial freeze burst |
+| `4` | ⚡ **THUNDER** | Branching lightning arcs, electrical charge buildup, lightning strike |
+| `5` | 🪨 **EARTH** | Rock debris orbit, dust clouds, shockwave, ground-crack illusion |
+| `6` | 🌪️ **WIND** | Spiral vortex arms, curved trail ribbons, wind pulse projectile |
+| `7` | 🌑 **VOID** | Dark vortex, gravitational orbiting, implosion → explosion |
+
+### Elemental Gesture Controls
+
+| Gesture | Effect |
+| :--- | :--- |
+| **Open Palm** | Activates elemental energy field; regenerates ENERGY bar |
+| **Hand Position** | Controls the position of the elemental effect in screen space |
+| **Fist** | Charges POWER; element-specific charge behavior (lightning arcs, embers, etc.) |
+| **Pinch** | Compresses/concentrates energy (fire sphere, ice orb, void distortion) |
+| **Swipe / Fast Movement** | Launches elemental projectile + shockwave; builds flow combo |
+| **Two Hands** | Activates energy field connector between hands; scales effect by distance |
+| **Clap (hands together)** | Elemental burst (detected from two-hand close event) |
+| **Keys 1–7** | Instantly switch active element |
+
+### Phase 2 Technical Architecture
+
+```
+AETHER-The-Visionary/
+│
+├── core/
+│   ├── particles.py           # Particle class, ParticlePool with object pooling (2500 cap)
+│   ├── vfx.py                 # Reusable VFX primitives: Shockwave, LightningArc, EnergyOrb,
+│   │                          #   OrbitRing, Vortex, EnergyTrail, Projectile
+│   └── effects.py             # EffectComposer: owns all live VFX + particle emitter library
+│
+└── experiences/
+    └── elemental_cultivation/
+        ├── __init__.py
+        ├── gestures.py        # ElementalGestureProcessor — rich mudra detection from
+        │                      #   MediaPipe landmarks (open palm, fist, pinch, swipe,
+        │                      #   two-hand, clap); EMA smoothed, cooldown gated
+        ├── elements.py        # 7 element classes (PhoenixFlame, GoldenSolar, Frost,
+        │                      #   Thunder, Earth, Wind, Void) with energy/power state
+        │                      #   machines and per-element VFX behaviour
+        ├── vfx_presets.py     # Element metadata (name, colour, key) for HUD
+        └── experience.py      # ElementalCultivationExperience — implements BaseExperience;
+                               #   orchestrates gesture, element, composer, and HUD
+```
+
+#### VFX Engine Design
+
+- **ParticlePool** — pre-allocates 2500 `Particle` objects; reuses dead particles to avoid per-frame allocation.
+- **Particle** — full property set: position, velocity, acceleration, lifetime, size, opacity, rotation, angular velocity, gravity, drag, trail, colour gradient, glow, orbit, attraction, turbulence. Supports shapes: `circle`, `square`, `shard`, `ring`.
+- **EffectComposer** — single-call `update(dt)` + `draw(surface)` drives all live VFX. Provides named emitters: `emit_rising_flames`, `emit_crystals`, `emit_rock_chunks`, `emit_void_fragments`, `emit_orbiting`, `emit_sparks`, `emit_radial_burst`, `emit_directed_stream`.
+- **Layered rendering**: particles → vortices → rings → trails → shockwaves → lightning → orbs → projectiles.
+
+#### Energy & Power Mechanic
+
+- **ENERGY** regenerates while holding Open Palm; consumed on launch.
+- **POWER** builds during Fist; drains passively; influences effect scale and intensity.
+- **FLOW / COMBO** builds with fast hand movement; decays when stationary.
+- All three bars are displayed in the live HUD panel.
+
+#### Two-Hand Field
+
+When two hands are detected, a procedural energy arc is drawn between the palms and a midpoint power orb appears. Field scale is proportional to the normalised distance between the two palms.
+
+---
+
 ## 🏗 System Architecture
 
 ```
@@ -52,21 +126,31 @@ AETHER-The-Visionary/
 │   ├── camera.py              # Threaded camera frame grabber with auto-fallback
 │   ├── tracker.py             # MediaPipe HandLandmarker wrapper with auto-model caching
 │   ├── gestures.py            # Temporal smoothing, hysteresis, and gesture debounce engine
-│   └── ui.py                  # Futuristic exhibition HUD, telemetry cards, and debug overlay
+│   ├── ui.py                  # Futuristic exhibition HUD, telemetry cards, and debug overlay
+│   ├── particles.py           # Particle system with object pooling (Phase 2)
+│   ├── vfx.py                 # VFX primitive classes (Phase 2)
+│   └── effects.py             # EffectComposer and emitter library (Phase 2)
 │
 ├── experiences/
 │   ├── base.py                # Abstract BaseExperience interface
-│   └── vision_controller/     # Phase 1: Built-in arcade cyber-runner
-│       └── runner.py          # 3D perspective projection, procedural audio synth, entities
+│   ├── vision_controller/     # Phase 1: Built-in arcade cyber-runner
+│   │   └── runner.py          # 3D perspective projection, procedural audio synth, entities
+│   └── elemental_cultivation/ # Phase 2: Elemental VFX experience
+│       ├── gestures.py        # Elemental gesture processor
+│       ├── elements.py        # Seven element classes
+│       ├── vfx_presets.py     # Element HUD metadata
+│       └── experience.py      # Main Phase 2 experience
 │
 ├── assets/
 │   └── models/                # Local model weights (hand_landmarker.task)
 │
-├── tests/                     # Comprehensive automated pytest suite
+├── tests/
 │   ├── test_gestures.py       # Gesture thresholding & hysteresis tests
 │   ├── test_tracker.py        # Landmark extraction & blank frame tests
 │   ├── test_runner.py         # Game logic, state transitions & collision tests
-│   └── test_app_lifecycle.py  # Full application boot, mode switch, and release tests
+│   ├── test_app_lifecycle.py  # Full application boot, mode switch, and release tests
+│   └── test_phase2.py         # 58 Phase 2 tests: particles, VFX, gestures, elements,
+│                              #   experience lifecycle, and Phase 1 regression
 │
 ├── main.py                    # Master exhibition launcher & state machine
 ├── requirements.txt           # Pinned dependencies
@@ -103,23 +187,36 @@ python main.py
 
 ## ⌨️ Presentation & Navigation Hotkeys
 
-While AETHER is designed to be played 100% hands-free during an exhibition, presenters have access to global management hotkeys:
-
-- **`1`** : Launch Phase 1 (Vision Controller) from Master Menu.
-- **`D`** : Toggle live **Debug Telemetry Panel** (displays active FPS, frame latency, tracked hands, normalized coordinates, and gesture confidence).
-- **`R` / `SPACE`** : Quick-restart current game session.
-- **`ESC`** : Return to AETHER Master Hub (or exit application from Master Hub).
+| Key | Action |
+| :--- | :--- |
+| `1` | Launch Phase 1 — Vision Controller |
+| `2` | Launch Phase 2 — Elemental Cultivation |
+| `1`–`7` *(in Phase 2)* | Switch active element |
+| `D` | Toggle live Debug Telemetry Panel |
+| `ESC` | Return to AETHER Master Hub (or exit from Hub) |
 
 ---
 
 ## 🧪 Automated Verification Suite
 
-Run the complete automated test suite:
+Run the complete automated test suite (no webcam required):
 ```powershell
 pytest -v
 ```
 
-All 16 unit and integration test suites verify gesture classification, boundary hysteresis, procedural audio synthesis, 3D perspective projection, collision matrices, and clean camera resource release.
+The suite covers 78 tests across:
+- Gesture classification and boundary hysteresis (Phase 1 + Phase 2)
+- Landmark extraction and blank frame handling
+- Particle lifecycle, pool exhaustion, and reuse
+- VFX object lifecycle (shockwaves, lightning, orbs, projectiles)
+- EffectComposer integration
+- All 7 element enter/exit/update cycles
+- Energy/power/flow state mechanics
+- Swipe projectile and shockwave spawning
+- Element switching via key events
+- Two-hand distance detection
+- Full application lifecycle with both Phase 1 and Phase 2
+- Phase 1 regression (runner game logic unchanged)
 
 ---
 

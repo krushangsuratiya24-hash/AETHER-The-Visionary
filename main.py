@@ -12,6 +12,7 @@ from core.tracker import HandTracker
 from core.gestures import GestureProcessor, GestureType
 from core.ui import HUD
 from experiences.vision_controller.runner import NeonRunnerExperience
+from experiences.elemental_cultivation import ElementalCultivationExperience
 
 
 class AetherApp:
@@ -108,7 +109,7 @@ class AetherApp:
         self.clock = pygame.time.Clock()
         self.running = True
 
-        # App state: 'LOADING' | 'MENU' | 'VISION_CONTROLLER'
+        # App state: 'LOADING' | 'MENU' | 'VISION_CONTROLLER' | 'ELEMENTAL_CULTIVATION'
         self.mode = 'LOADING'
         self.debug_mode = False
 
@@ -131,6 +132,7 @@ class AetherApp:
         self.gestures: 'GestureProcessor | None' = None
         self.hud: 'HUD | None' = None
         self.runner_experience: 'NeonRunnerExperience | None' = None
+        self.elemental_experience: 'ElementalCultivationExperience | None' = None
 
         self._init_error: str | None = None
         self._init_status: str = 'Starting...'
@@ -168,9 +170,12 @@ class AetherApp:
             self.tracker = tracker
             self.gestures = gestures
 
-            self._init_status = 'Building experience...'
+            self._init_status = 'Building experiences...'
             runner = NeonRunnerExperience(display_config.width, display_config.height)
             self.runner_experience = runner
+
+            elemental = ElementalCultivationExperience(display_config.width, display_config.height)
+            self.elemental_experience = elemental
 
             # HUD must be created here but uses existing screen — that is fine
             # because we only blit to the screen from the main thread.
@@ -287,6 +292,11 @@ class AetherApp:
                 if self.mode == 'VISION_CONTROLLER' and self.runner_experience is not None:
                     self.runner_experience.handle_gesture(current_gesture, active_action, norm_pos)
                     self.runner_experience.update(dt)
+                elif self.mode == 'ELEMENTAL_CULTIVATION' and self.elemental_experience is not None:
+                    # Pass full landmark data to elemental experience for rich gesture detection
+                    self.elemental_experience.handle_hands(hands)
+                    self.elemental_experience.handle_gesture(current_gesture, active_action, norm_pos)
+                    self.elemental_experience.update(dt)
 
                 # ── 5. Render Pipeline ────────────────────────────────────────
                 self.screen.fill(palette.VOID_DARK)
@@ -295,6 +305,8 @@ class AetherApp:
                     self._render_master_menu(norm_pos, hands)
                 elif self.mode == 'VISION_CONTROLLER' and self.runner_experience is not None:
                     self.runner_experience.render(self.screen)
+                elif self.mode == 'ELEMENTAL_CULTIVATION' and self.elemental_experience is not None:
+                    self.elemental_experience.render(self.screen)
 
                 # ── 6. Composite HUD Overlays ─────────────────────────────────
                 if self.hud is not None:
@@ -302,6 +314,7 @@ class AetherApp:
                     mode_labels = {
                         'MENU': 'MAIN HUB',
                         'VISION_CONTROLLER': 'PHASE 1 // VISION CONTROLLER',
+                        'ELEMENTAL_CULTIVATION': 'PHASE 2 // ELEMENTAL CULTIVATION',
                     }
                     self.hud.draw_top_bar(mode_labels.get(self.mode, self.mode), self.fps, is_mock)
 
@@ -361,6 +374,10 @@ class AetherApp:
                         if self.runner_experience:
                             self.runner_experience.exit()
                         self.mode = 'MENU'
+                    elif self.mode == 'ELEMENTAL_CULTIVATION':
+                        if self.elemental_experience:
+                            self.elemental_experience.exit()
+                        self.mode = 'MENU'
                     elif self.mode == 'MENU':
                         self.running = False
                     continue
@@ -369,14 +386,24 @@ class AetherApp:
                 if self.mode == 'MENU':
                     if event.key in (pygame.K_1, pygame.K_SPACE, pygame.K_RETURN):
                         self._enter_vision_controller()
+                    elif event.key == pygame.K_2:
+                        self._enter_elemental_cultivation()
                 elif self.mode == 'VISION_CONTROLLER' and self.runner_experience:
                     self.runner_experience.handle_key(event)
+                elif self.mode == 'ELEMENTAL_CULTIVATION' and self.elemental_experience:
+                    self.elemental_experience.handle_key(event)
 
     def _enter_vision_controller(self):
         if self.runner_experience is None:
             return
         self.mode = 'VISION_CONTROLLER'
         self.runner_experience.enter()
+
+    def _enter_elemental_cultivation(self):
+        if self.elemental_experience is None:
+            return
+        self.mode = 'ELEMENTAL_CULTIVATION'
+        self.elemental_experience.enter()
 
     # ─────────────────────────────────────────────────────────────────────────
     # Rendering Helpers
@@ -449,33 +476,37 @@ class AetherApp:
                 'active': True,
                 'color': palette.CYAN_NEON,
                 'border': palette.CYAN_NEON,
+                'action': '1',
             },
             {
                 'key': '2',
                 'title': 'ELEMENTAL CULTIVATION',
-                'subtitle': '7-Element Particle VFX & Gesture Mudras',
-                'status': 'LOCKED — PHASE 2',
-                'active': False,
-                'color': palette.LOCKED_GRAY,
-                'border': palette.BORDER_DIM,
+                'subtitle': '7-Element Particle VFX Gesture Mudras',
+                'status': 'READY // UNLOCKED',
+                'active': True,
+                'color': palette.GOLD_ACCENT,
+                'border': palette.GOLD_ACCENT,
+                'action': '2',
             },
             {
                 'key': '3',
                 'title': 'PHASE SHIFT',
-                'subtitle': 'Clap Acoustic Trigger & Predator Cloaking',
+                'subtitle': 'Clap Acoustic Trigger Predator Cloaking',
                 'status': 'LOCKED — PHASE 3',
                 'active': False,
                 'color': palette.LOCKED_GRAY,
                 'border': palette.BORDER_DIM,
+                'action': None,
             },
             {
                 'key': '4',
                 'title': 'REALITY SCULPTOR',
-                'subtitle': 'Spatial 3D Mesh Manipulation & Holography',
+                'subtitle': 'Spatial 3D Mesh Manipulation Holography',
                 'status': 'LOCKED — PHASE 4',
                 'active': False,
                 'color': palette.LOCKED_GRAY,
                 'border': palette.BORDER_DIM,
+                'action': None,
             },
         ]
 
@@ -523,8 +554,9 @@ class AetherApp:
             card_surf.blit(self.font_card_desc.render(line2, True, text_c), (14, 128))
 
             if card['active']:
-                btn_txt = '► PRESS 1 OR HOVER TO PLAY' if not is_hovered else '► ACTIVE (ENTER TO PLAY)'
-                btn_surf = self.font_badge.render(btn_txt, True, palette.CYAN_NEON)
+                key_hint = card['key']
+                btn_txt = f'► PRESS {key_hint} TO LAUNCH' if not is_hovered else f'► ACTIVE (PRESS {key_hint})'
+                btn_surf = self.font_badge.render(btn_txt, True, card['color'])
                 card_surf.blit(btn_surf, (14, card_h - 32))
             else:
                 btn_surf = self.font_badge.render('EXHIBITION LOCKED', True, palette.LOCKED_GRAY)
@@ -533,7 +565,7 @@ class AetherApp:
             self.screen.blit(card_surf, (x, card_y))
 
         footer_txt = self.font_instr.render(
-            'Hotkeys: [1] Play Vision Controller  |  [D] Toggle Debug Telemetry  |  [ESC] Exit',
+            'Hotkeys: [1] Vision Controller  [2] Elemental Cultivation  |  [D] Debug  |  [ESC] Exit',
             True, palette.TEXT_MUTED
         )
         self.screen.blit(footer_txt, (cx - footer_txt.get_width() // 2, h - 38))
@@ -564,6 +596,8 @@ class AetherApp:
         self._init_done.set()
         if self.runner_experience:
             self.runner_experience.exit()
+        if self.elemental_experience:
+            self.elemental_experience.exit()
         if self.camera:
             self.camera.release()
         pygame.quit()
