@@ -14,6 +14,7 @@ from core.ui import HUD
 from experiences.vision_controller.runner import NeonRunnerExperience
 from experiences.elemental_cultivation import ElementalCultivationExperience
 from experiences.phase_shift import PhaseShiftExperience
+from experiences.spectrum_vision import SpectrumVisionExperience
 
 
 class AetherApp:
@@ -110,7 +111,7 @@ class AetherApp:
         self.clock = pygame.time.Clock()
         self.running = True
 
-        # App state: 'LOADING' | 'MENU' | 'VISION_CONTROLLER' | 'ELEMENTAL_CULTIVATION' | 'PHASE_SHIFT'
+        # App state: 'LOADING' | 'MENU' | 'VISION_CONTROLLER' | 'ELEMENTAL_CULTIVATION' | 'PHASE_SHIFT' | 'SPECTRUM_VISION'
         self.mode = 'LOADING'
         self.debug_mode = False
 
@@ -135,6 +136,7 @@ class AetherApp:
         self.runner_experience: 'NeonRunnerExperience | None' = None
         self.elemental_experience: 'ElementalCultivationExperience | None' = None
         self.phase_shift_experience: 'PhaseShiftExperience | None' = None
+        self.spectrum_vision_experience: 'SpectrumVisionExperience | None' = None
 
         self._init_error: str | None = None
         self._init_status: str = 'Starting...'
@@ -182,6 +184,10 @@ class AetherApp:
             self._init_status = 'Loading Phase Shift...'
             phase_shift = PhaseShiftExperience(display_config.width, display_config.height)
             self.phase_shift_experience = phase_shift
+
+            self._init_status = 'Loading Spectrum Vision...'
+            spectrum_vision = SpectrumVisionExperience(display_config.width, display_config.height)
+            self.spectrum_vision_experience = spectrum_vision
 
             # HUD must be created here but uses existing screen — that is fine
             # because we only blit to the screen from the main thread.
@@ -309,10 +315,15 @@ class AetherApp:
                     if ret and frame is not None:
                         self.phase_shift_experience.push_camera_frame(frame)
                     self.phase_shift_experience.update(dt)
+                elif self.mode == 'SPECTRUM_VISION' and self.spectrum_vision_experience is not None:
+                    # Spectrum Vision: push camera frame only (no hand gestures)
+                    if ret and frame is not None:
+                        self.spectrum_vision_experience.push_camera_frame(frame)
+                    self.spectrum_vision_experience.update(dt)
 
                 # ── 5. Render Pipeline ────────────────────────────────────────
-                # Phase Shift renders the full composited frame itself — no fill needed
-                if self.mode != 'PHASE_SHIFT':
+                # Phase Shift and Spectrum Vision render full composited frames themselves
+                if self.mode not in ('PHASE_SHIFT', 'SPECTRUM_VISION'):
                     self.screen.fill(palette.VOID_DARK)
 
                 if self.mode == 'MENU':
@@ -323,10 +334,12 @@ class AetherApp:
                     self.elemental_experience.render(self.screen)
                 elif self.mode == 'PHASE_SHIFT' and self.phase_shift_experience is not None:
                     self.phase_shift_experience.render(self.screen)
+                elif self.mode == 'SPECTRUM_VISION' and self.spectrum_vision_experience is not None:
+                    self.spectrum_vision_experience.render(self.screen)
 
                 # ── 6. Composite HUD Overlays ─────────────────────────────────
-                # Phase Shift draws its own HUD; skip global HUD for that mode
-                if self.hud is not None and self.mode != 'PHASE_SHIFT':
+                # Phase Shift and Spectrum Vision draw their own HUDs
+                if self.hud is not None and self.mode not in ('PHASE_SHIFT', 'SPECTRUM_VISION'):
                     is_mock = self.camera.is_mock if self.camera else True
                     mode_labels = {
                         'MENU': 'MAIN HUB',
@@ -341,8 +354,8 @@ class AetherApp:
                         self.hud.draw_gesture_card(current_gesture, active_action)
 
                 # ── 7. Camera PIP ─────────────────────────────────────────────
-                # Phase Shift uses the full-frame composited view — no PIP needed
-                if frame is not None and self.mode not in ('PHASE_SHIFT',):
+                # Phase Shift and Spectrum Vision use the full-frame view — no PIP needed
+                if frame is not None and self.mode not in ('PHASE_SHIFT', 'SPECTRUM_VISION'):
                     self._render_camera_pip(frame)
 
                 # ── 8. Debug Telemetry ────────────────────────────────────────
@@ -400,8 +413,17 @@ class AetherApp:
                         if self.phase_shift_experience:
                             self.phase_shift_experience.exit()
                         self.mode = 'MENU'
+                    elif self.mode == 'SPECTRUM_VISION':
+                        if self.spectrum_vision_experience:
+                            self.spectrum_vision_experience.exit()
+                        self.mode = 'MENU'
                     elif self.mode == 'MENU':
                         self.running = False
+                    continue
+
+                # Quit hotkey (Q) when in Spectrum Vision
+                if event.key == pygame.K_q and self.mode == 'SPECTRUM_VISION':
+                    self.running = False
                     continue
 
                 # Mode Hotkeys (only when not loading)
@@ -412,12 +434,16 @@ class AetherApp:
                         self._enter_elemental_cultivation()
                     elif event.key == pygame.K_3:
                         self._enter_phase_shift()
+                    elif event.key == pygame.K_4:
+                        self._enter_spectrum_vision()
                 elif self.mode == 'VISION_CONTROLLER' and self.runner_experience:
                     self.runner_experience.handle_key(event)
                 elif self.mode == 'ELEMENTAL_CULTIVATION' and self.elemental_experience:
                     self.elemental_experience.handle_key(event)
                 elif self.mode == 'PHASE_SHIFT' and self.phase_shift_experience:
                     self.phase_shift_experience.handle_key(event)
+                elif self.mode == 'SPECTRUM_VISION' and self.spectrum_vision_experience:
+                    self.spectrum_vision_experience.handle_key(event)
 
     def _enter_vision_controller(self):
         if self.runner_experience is None:
@@ -436,6 +462,12 @@ class AetherApp:
             return
         self.mode = 'PHASE_SHIFT'
         self.phase_shift_experience.enter()
+
+    def _enter_spectrum_vision(self):
+        if self.spectrum_vision_experience is None:
+            return
+        self.mode = 'SPECTRUM_VISION'
+        self.spectrum_vision_experience.enter()
 
     # ─────────────────────────────────────────────────────────────────────────
     # Rendering Helpers
@@ -532,13 +564,13 @@ class AetherApp:
             },
             {
                 'key': '4',
-                'title': 'REALITY SCULPTOR',
-                'subtitle': 'Spatial 3D Mesh Manipulation Holography',
-                'status': 'LOCKED — PHASE 4',
-                'active': False,
-                'color': palette.LOCKED_GRAY,
-                'border': palette.BORDER_DIM,
-                'action': None,
+                'title': 'SPECTRUM VISION',
+                'subtitle': 'Real-time People Vision Seven Themes',
+                'status': 'READY // UNLOCKED',
+                'active': True,
+                'color': (0, 200, 255),
+                'border': (0, 200, 255),
+                'action': '4',
             },
         ]
 
@@ -597,7 +629,7 @@ class AetherApp:
             self.screen.blit(card_surf, (x, card_y))
 
         footer_txt = self.font_instr.render(
-            'Hotkeys: [1] Vision Controller  [2] Elemental Cultivation  [3] Phase Shift  |  [D] Debug  |  [ESC] Exit',
+            'Hotkeys: [1] Vision Controller  [2] Elemental Cultivation  [3] Phase Shift  [4] Spectrum Vision  |  [D] Debug  |  [ESC] Exit',
             True, palette.TEXT_MUTED
         )
         self.screen.blit(footer_txt, (cx - footer_txt.get_width() // 2, h - 38))
@@ -632,6 +664,8 @@ class AetherApp:
             self.elemental_experience.exit()
         if self.phase_shift_experience:
             self.phase_shift_experience.exit()
+        if self.spectrum_vision_experience:
+            self.spectrum_vision_experience.exit()
         if self.camera:
             self.camera.release()
         pygame.quit()
