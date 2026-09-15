@@ -1,225 +1,434 @@
 # AETHER — THE VISIONARY
-### *"Your hands are the controller."*
 
-[![Python](https://img.shields.io/badge/Python-3.12%20%7C%203.13-00F0FF?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)
-[![Platform](https://img.shields.io/badge/Platform-Windows%2011-0078D4?style=for-the-badge&logo=windows&logoColor=white)](https://microsoft.com/windows)
-[![OpenCV](https://img.shields.io/badge/Vision-OpenCV%205.0-5C3EE8?style=for-the-badge&logo=opencv&logoColor=white)](https://opencv.org/)
-[![MediaPipe](https://img.shields.io/badge/AI-MediaPipe%201.0-FF0055?style=for-the-badge&logo=google&logoColor=white)](https://developers.google.com/mediapipe)
-[![Pygame-CE](https://img.shields.io/badge/Engine-Pygame--CE%202.5-FFD700?style=for-the-badge&logo=python&logoColor=black)](https://pyga.me/)
-[![License](https://img.shields.io/badge/License-MIT-00FF66?style=for-the-badge)](LICENSE)
+> *Your hands are the controller.*
+> *See people beyond the ordinary.*
+> *What if your hands could control reality?*
 
-**AETHER — The Visionary** is an exhibition-grade Computer Vision suite engineered for high-impact live interactive demonstrations. By merging sub-millisecond optical hand tracking, temporal gesture filtering, and real-time CPU rendering, AETHER eliminates traditional input hardware, turning human gesture dynamics directly into virtual interaction.
+**AETHER — The Visionary** is a real-time interactive Computer Vision exhibition platform built in Python. It combines webcam-driven human segmentation, gesture recognition, multi-person visualization, particle systems, and full-screen visual effects into four progressively complex experiences — all running live from a standard RGB webcam.
+
+The project was developed as a four-phase engineering journey, evolving from gesture-controlled interaction into a futuristic multi-person visualization platform.
 
 ---
 
-## 🌟 Exhibition Roadmap & Phase Status
+## 🎥 Demo
 
-| Phase | Experience | Status | Description |
-| :---: | :--- | :---: | :--- |
-| **01** | **🎮 VISION CONTROLLER** | **READY // UNLOCKED** | Full hand-gesture-driven endless 3D arcade cyber-runner with zero-latency controls. |
-| **02** | **🔥 ELEMENTAL CULTIVATION** | **READY // UNLOCKED** | 7-Element real-time particle VFX engine driven by mudras and hand stances. |
-| **03** | **👻 PHASE SHIFT** | *LOCKED (PHASE 3)* | Acoustic transient clap detection + person segmentation for optical cloaking. |
-| **04** | **🌀 REALITY SCULPTOR** | *LOCKED (PHASE 4)* | Spatial 6-DOF 2D & 3D wireframe mesh manipulation (grab, rotate, scale, clone). |
+> Demo video coming soon.
+
+<!-- TODO: Add final AETHER demo video link here once captured from the working application -->
 
 ---
 
-## 🎮 Phase 1: Vision Controller (Operational)
+## 📸 Screenshots
 
-The first operational experience in AETHER is **Neon Runner**, a high-octane 3D perspective cyber-runner rendered directly in real-time. Players pilot an advanced hovering craft down a neon perspective grid, dodging obstacles, jumping laser barriers, sliding beneath plasma gates, and collecting luminous Aether Cores.
+> Real exhibition screenshots coming soon.
 
-### Gesture Controls (Zero Keyboard Required)
-
-| Action | Physical Gesture | Feedback & HUD Indicator |
-| :--- | :--- | :--- |
-| **STEER LEFT** | Move hand into the Left Zone ($X < 0.33$) | Lane shift Left + Cyan particle spray |
-| **STEER RIGHT** | Move hand into the Right Zone ($X > 0.67$) | Lane shift Right + Cyan particle spray |
-| **JUMP** | Raise hand upward ($Y < 0.32$) or swift upward swipe | Parabolic vertical leap + Golden particle arc |
-| **SLIDE** | Lower hand downward ($Y > 0.68$) or swift downward swipe | Aerodynamic crouch glide + Laser magenta sparks |
-| **NEUTRAL** | Maintain hand in centered zone ($0.38 \le X \le 0.62$) | Balanced forward thrust trajectory |
-| **ENGAGE / RESTART** | Raise hand or hold neutral in Game Over / Ready screen | Instant match countdown & restart |
-
-> **Anti-Jitter & Hysteresis**: AETHER utilizes an exponential moving average (EMA) smoothing filter alongside dual-boundary hysteresis corridors. Small accidental hand tremors will never cause false-positive lane changes or unintended jumps.
+<!-- TODO: Add real screenshots captured from the running application for each of the four experiences -->
 
 ---
 
-## 🔥 Phase 2: Elemental Cultivation (Operational)
+## ✨ Four Exhibition Experiences
 
-**Elemental Cultivation** is a real-time interactive particle VFX experience where the user's hands directly sculpt elemental energy fields rendered in the Pygame window. Seven distinct elemental disciplines are implemented, each with a unique visual identity powered by a modular VFX engine.
+### 🎮 Phase 1 — Vision Controller
 
-### Seven Elemental Disciplines
+A hand-gesture-controlled endless arcade experience.
 
-| Key | Element | Visual Identity |
-| :---: | :--- | :--- |
-| `1` | 🔥 **PHOENIX FLAME** | Rising flames, embers, fire trails, heat shimmer, explosive bursts |
-| `2` | ☀️ **GOLDEN SOLAR** | Radial rays, orbiting particles, pulsing solar core, orbit rings |
-| `3` | ❄️ **FROST** | Ice shards, crystalline fragments, frosty aura, radial freeze burst |
-| `4` | ⚡ **THUNDER** | Branching lightning arcs, electrical charge buildup, lightning strike |
-| `5` | 🪨 **EARTH** | Rock debris orbit, dust clouds, shockwave, ground-crack illusion |
-| `6` | 🌪️ **WIND** | Spiral vortex arms, curved trail ribbons, wind pulse projectile |
-| `7` | 🌑 **VOID** | Dark vortex, gravitational orbiting, implosion → explosion |
+- Live webcam tracks your hand position and gesture state in real time.
+- **Controls:** Move hand LEFT / RIGHT to change lanes, raise hand to JUMP, lower to SLIDE.
+- Gesture detection uses MediaPipe HandLandmarker with temporal smoothing and hysteresis to prevent false triggers.
+- Keyboard fallback available.
+- Futuristic cyberpunk HUD with FPS counter, gesture telemetry, and reticle overlay.
 
-### Elemental Gesture Controls
+---
+
+### 🔥 Phase 2 — Elemental Cultivation
+
+A gesture-driven elemental particle and VFX experience.
+
+- Both hands tracked simultaneously via MediaPipe HandLandmarker.
+- Seven elemental visual modes selectable by keyboard:
+
+| Key | Element |
+|-----|---------|
+| 1 | 🔥 Phoenix Flame |
+| 2 | ☀️ Golden Solar |
+| 3 | ❄️ Frost |
+| 4 | ⚡ Thunder |
+| 5 | 🪨 Earth |
+| 6 | 🌪️ Wind |
+| 7 | 🌑 Void |
+
+- Gesture interactions: open palm regens energy, fist charges power, swipe launches a projectile shockwave.
+- Custom particle engine with object pooling, glow effects, trails, orbit rings, and energy strands.
+- Two-hand distance field creates a visual "summoning" effect between hands.
+
+---
+
+### 👻 Phase 3 — Phase Shift
+
+Gesture-controlled real-time body transparency using person segmentation and background compositing.
 
 | Gesture | Effect |
-| :--- | :--- |
-| **Open Palm** | Activates elemental energy field; regenerates ENERGY bar |
-| **Hand Position** | Controls the position of the elemental effect in screen space |
-| **Fist** | Charges POWER; element-specific charge behavior (lightning arcs, embers, etc.) |
-| **Pinch** | Compresses/concentrates energy (fire sphere, ice orb, void distortion) |
-| **Swipe / Fast Movement** | Launches elemental projectile + shockwave; builds flow combo |
-| **Two Hands** | Activates energy field connector between hands; scales effect by distance |
-| **Clap (hands together)** | Elemental burst (detected from two-hand close event) |
-| **Keys 1–7** | Instantly switch active element |
+|---------|--------|
+| ☝ One finger | 25% transparent |
+| ✌ Two fingers | 50% transparent |
+| 🖖 Three fingers | 75% transparent |
+| 🖐 Five fingers (open palm) | 100% invisible |
+| Four fingers | Ignored (dead zone) |
 
-### Phase 2 Technical Architecture
-
-```
-AETHER-The-Visionary/
-│
-├── core/
-│   ├── particles.py           # Particle class, ParticlePool with object pooling (2500 cap)
-│   ├── vfx.py                 # Reusable VFX primitives: Shockwave, LightningArc, EnergyOrb,
-│   │                          #   OrbitRing, Vortex, EnergyTrail, Projectile
-│   └── effects.py             # EffectComposer: owns all live VFX + particle emitter library
-│
-└── experiences/
-    └── elemental_cultivation/
-        ├── __init__.py
-        ├── gestures.py        # ElementalGestureProcessor — rich mudra detection from
-        │                      #   MediaPipe landmarks (open palm, fist, pinch, swipe,
-        │                      #   two-hand, clap); EMA smoothed, cooldown gated
-        ├── elements.py        # 7 element classes (PhoenixFlame, GoldenSolar, Frost,
-        │                      #   Thunder, Earth, Wind, Void) with energy/power state
-        │                      #   machines and per-element VFX behaviour
-        ├── vfx_presets.py     # Element metadata (name, colour, key) for HUD
-        └── experience.py      # ElementalCultivationExperience — implements BaseExperience;
-                               #   orchestrates gesture, element, composer, and HUD
-```
-
-#### VFX Engine Design
-
-- **ParticlePool** — pre-allocates 2500 `Particle` objects; reuses dead particles to avoid per-frame allocation.
-- **Particle** — full property set: position, velocity, acceleration, lifetime, size, opacity, rotation, angular velocity, gravity, drag, trail, colour gradient, glow, orbit, attraction, turbulence. Supports shapes: `circle`, `square`, `shard`, `ring`.
-- **EffectComposer** — single-call `update(dt)` + `draw(surface)` drives all live VFX. Provides named emitters: `emit_rising_flames`, `emit_crystals`, `emit_rock_chunks`, `emit_void_fragments`, `emit_orbiting`, `emit_sparks`, `emit_radial_burst`, `emit_directed_stream`.
-- **Layered rendering**: particles → vortices → rings → trails → shockwaves → lightning → orbs → projectiles.
-
-#### Energy & Power Mechanic
-
-- **ENERGY** regenerates while holding Open Palm; consumed on launch.
-- **POWER** builds during Fist; drains passively; influences effect scale and intensity.
-- **FLOW / COMBO** builds with fast hand movement; decays when stationary.
-- All three bars are displayed in the live HUD panel.
-
-#### Two-Hand Field
-
-When two hands are detected, a procedural energy arc is drawn between the palms and a midpoint power orb appears. Field scale is proportional to the normalised distance between the two palms.
+- At 100% invisible: MediaPipe person segmentation replaces the person region with a running background estimate — creating genuine see-through compositing.
+- Smooth lerp transitions between transparency levels.
+- Animated edge glow, holographic distortion, and particle effects during phase transitions.
+- **No microphone or clap detection required.** All interaction is through hand gestures only.
+- Four-finger gesture is intentionally a dead zone to prevent accidental triggering of full invisibility.
 
 ---
 
-## 🏗 System Architecture
+### 🌀 Phase 4 — Spectrum Vision
+
+> *"See people beyond the ordinary."*
+
+Spectrum Vision transforms a live RGB webcam feed into a futuristic real-time people-visualization system. The camera detects and segments people in the scene, then applies one of seven visual themes independently to each detected person.
+
+**Seven selectable themes (keys 1–7):**
+
+| Key | Theme | Description |
+|-----|-------|-------------|
+| 1 | 🔥 Thermal Simulation | `[SIMULATED]` Thermal-style heat-map derived from RGB luminance with animated shimmer and scanlines |
+| 2 | 🦴 X-Ray Style | `[SIMULATED]` Translucent body fill with glowing silhouette, procedural skeleton, joint nodes, and scan sweep |
+| 3 | 🟢 Neon Edge | Multi-layer glowing segmentation-contour with animated neon pulse and contour particles |
+| 4 | 👤 Silhouette | Clean holographic body fill with internal scanline texture and dual-layer edge glow |
+| 5 | 🛰️ Radar | Green-tinted targeting overlay with radar sweep, per-person tracking brackets, trail, and IDs |
+| 6 | ⚡ Energy | Pulsing energy aura, procedural arc strands, and particle emission from person contour |
+| 7 | 🌌 Cyber Vision | **Primary showcase.** Moving grid, holographic body fill, animated scan sweep, multi-layer edge glow, energy pulse through body, glitch accents, target brackets, data labels, per-person particles |
+
+**Multi-person support:**
+- Up to 6 people can be detected and visualized independently.
+- Each person receives their own segmentation mask, visual treatment, and tracking identity.
+- Stable temporary tracking IDs (`PERSON 01`, `PERSON 02`, …) persist across frames using centroid-distance matching.
+- Graceful handling of people entering, leaving, and re-entering the scene.
+
+---
+
+## ⚠️ Important Technical Notes
+
+### Thermal Simulation
+- The Thermal theme creates a **simulated** thermal-camera-inspired visualization using RGB luminance data, not actual temperature.
+- It does **not** require a thermal camera.
+- It does **not** measure body temperature.
+
+### X-Ray Style
+- The X-Ray theme creates an X-ray-**inspired** structural overlay.
+- It is **not** actual X-ray imaging.
+- It does **not** see through clothing or objects.
+- The skeleton is procedurally estimated from the person's bounding box — not from actual bone structure.
+
+### Radar
+- The Radar theme is a **visual** tracking and scanning system.
+- It does **not** provide real-world physical distance measurements (no depth hardware is used).
+- Tracking IDs are session-based temporary assignments.
+
+**All four experiences use a standard RGB webcam only.**
+
+---
+
+## 🔬 Computer Vision Pipeline
+
+### Phase 3 & 4 — Person Segmentation
+
+```
+Webcam (RGB, 1280×720)
+        │
+        ▼
+Frame capture (ThreadedCamera — non-blocking background thread)
+        │
+        ▼
+MediaPipe Selfie Segmenter (selfie_segmenter.tflite, 256×144 processing)
+        │
+        ▼
+Temporal EMA smoothing + morphological cleanup + hole fill
+        │
+        ▼
+Full-resolution binary person mask (0 = background, 255 = person)
+        │
+        ├─── Phase 3: Background compositor → invisible compositing
+        │
+        └─── Phase 4: Connected-component analysis → per-person blobs
+                │
+                ▼
+        Multi-person tracker (centroid-distance matching, stable IDs)
+                │
+                ▼
+        Theme renderer (7 visual modes)
+                │
+                ▼
+        Particles / VFX overlay
+                │
+                ▼
+        HUD (mode, people count, FPS, tracking state, theme selector)
+                │
+                ▼
+        Real-time fullscreen display (Pygame, target 60 FPS)
+```
+
+**Known multi-person limitation:** The MediaPipe selfie segmenter produces a single unified foreground mask. When two people physically overlap or stand very close together, connected-component analysis may merge them into a single blob. Separation improves as soon as physical distance between people increases.
+
+---
+
+## 🏗️ Project Architecture
 
 ```
 AETHER-The-Visionary/
 │
 ├── core/
-│   ├── config.py              # Central display, gesture, palette, and camera settings
-│   ├── camera.py              # Threaded camera frame grabber with auto-fallback
-│   ├── tracker.py             # MediaPipe HandLandmarker wrapper with auto-model caching
-│   ├── gestures.py            # Temporal smoothing, hysteresis, and gesture debounce engine
-│   ├── ui.py                  # Futuristic exhibition HUD, telemetry cards, and debug overlay
-│   ├── particles.py           # Particle system with object pooling (Phase 2)
-│   ├── vfx.py                 # VFX primitive classes (Phase 2)
-│   └── effects.py             # EffectComposer and emitter library (Phase 2)
+│   ├── camera.py         # ThreadedCamera — non-blocking webcam capture with mock fallback
+│   ├── tracker.py        # MediaPipe HandLandmarker — 21-point hand landmark detection
+│   ├── segmentation.py   # PersonSegmenter — MediaPipe selfie segmentation with EMA smoothing
+│   ├── compositor.py     # BackgroundCompositor — running background model + invisibility compositing
+│   ├── particles.py      # ParticlePool — object-pooled particle engine (no per-frame allocation)
+│   ├── vfx.py            # VFX classes — shockwaves, lightning arcs, energy orbs, projectiles
+│   ├── effects.py        # EffectComposer — high-level VFX orchestration
+│   ├── gestures.py       # GestureProcessor — hand position → gesture state with hysteresis
+│   ├── ui.py             # HUD — futuristic telemetry, reticles, gesture cards
+│   └── config.py         # DisplayConfig, CameraConfig, Palette, PathsConfig
 │
 ├── experiences/
-│   ├── base.py                # Abstract BaseExperience interface
-│   ├── vision_controller/     # Phase 1: Built-in arcade cyber-runner
-│   │   └── runner.py          # 3D perspective projection, procedural audio synth, entities
-│   └── elemental_cultivation/ # Phase 2: Elemental VFX experience
-│       ├── gestures.py        # Elemental gesture processor
-│       ├── elements.py        # Seven element classes
-│       ├── vfx_presets.py     # Element HUD metadata
-│       └── experience.py      # Main Phase 2 experience
-│
-├── assets/
-│   └── models/                # Local model weights (hand_landmarker.task)
+│   ├── base.py                       # BaseExperience — abstract lifecycle interface
+│   ├── vision_controller/
+│   │   └── runner.py                 # Phase 1 — arcade runner experience
+│   ├── elemental_cultivation/
+│   │   ├── experience.py             # Phase 2 — main orchestrator
+│   │   ├── elements.py               # Seven elemental VFX definitions
+│   │   ├── gestures.py               # Two-hand gesture processor
+│   │   └── vfx_presets.py            # Element-specific particle/effect presets
+│   ├── phase_shift/
+│   │   ├── experience.py             # Phase 3 — main orchestrator
+│   │   ├── gestures.py               # Finger-count gesture classifier
+│   │   ├── state.py                  # AlphaController — smooth transparency lerp
+│   │   ├── vfx.py                    # Phase Shift edge glow and particle effects
+│   │   └── config.py                 # Phase Shift configuration constants
+│   └── spectrum_vision/
+│       ├── experience.py             # Phase 4 — main orchestrator
+│       ├── themes.py                 # ThemeRegistry — seven theme descriptors
+│       ├── people.py                 # DetectedPerson — per-person mask decomposition
+│       ├── renderer.py               # SpectrumRenderer — all seven theme pipelines
+│       └── tracking.py               # MultiPersonTracker — centroid-distance stable IDs
 │
 ├── tests/
-│   ├── test_gestures.py       # Gesture thresholding & hysteresis tests
-│   ├── test_tracker.py        # Landmark extraction & blank frame tests
-│   ├── test_runner.py         # Game logic, state transitions & collision tests
-│   ├── test_app_lifecycle.py  # Full application boot, mode switch, and release tests
-│   └── test_phase2.py         # 58 Phase 2 tests: particles, VFX, gestures, elements,
-│                              #   experience lifecycle, and Phase 1 regression
+│   ├── test_phase2.py                # Phase 2 test suite
+│   ├── test_phase3.py                # Phase 3 test suite
+│   ├── test_phase4.py                # Phase 4 test suite (65 tests)
+│   ├── test_runner.py                # Phase 1 runner tests
+│   ├── test_tracker.py               # Hand tracker tests
+│   ├── test_gestures.py              # Gesture processor tests
+│   ├── test_app_lifecycle.py         # Application lifecycle tests
+│   └── test_display_init.py          # Display initialization tests
 │
-├── main.py                    # Master exhibition launcher & state machine
-├── requirements.txt           # Pinned dependencies
-├── .gitignore                 # Tuned repository ignore rules
-├── LICENSE                    # MIT License
-└── README.md                  # Project landing page & documentation
+├── assets/
+│   └── models/
+│       ├── selfie_segmenter.tflite   # MediaPipe person segmentation model
+│       └── hand_landmarker.task      # MediaPipe hand landmark detection model
+│
+├── main.py                           # Application entry point + master launcher
+└── requirements.txt
 ```
 
 ---
 
-## 🚀 Quickstart & Installation
+## 🌀 Spectrum Vision Module Detail
 
-### 1. Prerequisites
-- **Operating System**: Windows 10/11, macOS, or Linux.
-- **Python**: Python 3.12 or 3.13 (64-bit recommended).
-- **Webcam**: Any standard USB or integrated webcam (automatic synthetic fallback included if no camera is connected).
-
-### 2. Setup Environment
-```powershell
-# Create and activate an isolated virtual environment
-python -m venv .venv
-.\.venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
+```
+experiences/spectrum_vision/
+│
+├── experience.py    # SpectrumVisionExperience — main orchestrator
+│                    # Owns camera frame injection, segmentation sub-sampling,
+│                    # person detection, tracking updates, rendering dispatch
+│
+├── themes.py        # ThemeID enum + ThemeDescriptor dataclass + ThemeRegistry
+│                    # Immutable registry of all seven themes with colors/metadata
+│
+├── people.py        # DetectedPerson dataclass + detect_persons()
+│                    # Decomposes the global segmentation mask into per-person blobs
+│                    # via OpenCV connectedComponentsWithStats; filters by area
+│
+├── renderer.py      # SpectrumRenderer — full-screen theme rendering pipeline
+│                    # One rendering method per theme + shared HUD + particle pool
+│
+└── tracking.py      # MultiPersonTracker — centroid-distance frame-to-frame matching
+                     # Assigns stable temporary IDs; handles entry, exit, re-entry
 ```
 
-### 3. Launch AETHER
-```powershell
+---
+
+## ⌨️ Controls
+
+### Main Menu
+
+| Key | Action |
+|-----|--------|
+| `1` | Launch Vision Controller |
+| `2` | Launch Elemental Cultivation |
+| `3` | Launch Phase Shift |
+| `4` | Launch Spectrum Vision |
+| `D` | Toggle debug overlay |
+| `ESC` | Exit |
+
+### Spectrum Vision (in-experience)
+
+| Key | Action |
+|-----|--------|
+| `1` | Thermal Simulation |
+| `2` | X-Ray Style |
+| `3` | Neon Edge |
+| `4` | Silhouette |
+| `5` | Radar |
+| `6` | Energy |
+| `7` | Cyber Vision |
+| `R` | Reset tracking (clear all track IDs) |
+| `D` | Toggle debug overlay |
+| `ESC` | Return to main menu |
+| `Q` | Quit |
+
+### Phase Shift (in-experience)
+
+| Gesture | Transparency |
+|---------|-------------|
+| ☝ One finger | 25% |
+| ✌ Two fingers | 50% |
+| 🖖 Three fingers | 75% |
+| 🖐 Five fingers | 100% invisible |
+| Four fingers | Ignored |
+
+---
+
+## 🛠️ Installation
+
+**Requirements:** Python 3.12 or 3.13 on Windows. A webcam is recommended; the application falls back to a synthetic test feed if no camera is detected.
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/<your-username>/AETHER-The-Visionary.git
+cd AETHER-The-Visionary
+
+# 2. Create and activate a virtual environment
+python -m venv .venv
+.venv\Scripts\activate
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+# 4. Run
 python main.py
 ```
 
----
-
-## ⌨️ Presentation & Navigation Hotkeys
-
-| Key | Action |
-| :--- | :--- |
-| `1` | Launch Phase 1 — Vision Controller |
-| `2` | Launch Phase 2 — Elemental Cultivation |
-| `1`–`7` *(in Phase 2)* | Switch active element |
-| `D` | Toggle live Debug Telemetry Panel |
-| `ESC` | Return to AETHER Master Hub (or exit from Hub) |
+> On first launch, MediaPipe will download the hand landmark model (~8 MB) automatically if it is not already present in `assets/models/`. The selfie segmentation model (`selfie_segmenter.tflite`) must be placed in `assets/models/` before using Phase 3 or Phase 4. See the comment in `core/segmentation.py` for the download URL.
 
 ---
 
-## 🧪 Automated Verification Suite
+## 🧪 Testing
 
-Run the complete automated test suite (no webcam required):
-```powershell
-pytest -v
+The project has a comprehensive automated test suite covering all four development phases — without requiring a webcam, microphone, or GPU.
+
+```bash
+# Run the full test suite
+.venv\Scripts\activate
+pytest tests/ -v
 ```
 
-The suite covers 78 tests across:
-- Gesture classification and boundary hysteresis (Phase 1 + Phase 2)
-- Landmark extraction and blank frame handling
-- Particle lifecycle, pool exhaustion, and reuse
-- VFX object lifecycle (shockwaves, lightning, orbs, projectiles)
-- EffectComposer integration
-- All 7 element enter/exit/update cycles
-- Energy/power/flow state mechanics
-- Swipe projectile and shockwave spawning
-- Element switching via key events
-- Two-hand distance detection
-- Full application lifecycle with both Phase 1 and Phase 2
-- Phase 1 regression (runner game logic unchanged)
+**Final test result: 251 passed**
+
+- Phase 1 (runner, gestures, tracker, display): included in the general test files
+- Phase 2 (`test_phase2.py`): particle system, VFX, elemental experience, multi-hand
+- Phase 3 (`test_phase3.py`): gesture classification, alpha controller, segmentation, compositing
+- Phase 4 (`test_phase4.py`): 65 tests — theme registry, person detection, multi-person tracking, renderer, experience lifecycle, launcher integration, no-fake-data assertions, Phase 1–3 regression
 
 ---
 
-## 📜 License
+## ⚡ Performance
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+Real-time performance depends on hardware and active configuration:
+
+- **CPU / GPU:** MediaPipe inference is CPU-bound on most laptops.
+- **Camera resolution:** Default capture is 1280×720; downsampling to 256×144 for segmentation.
+- **Segmentation frequency:** Segmentation runs every 2nd frame in Spectrum Vision to reduce CPU load while maintaining smooth visual continuity.
+- **Number of people:** Each additional detected person adds connected-component analysis and per-person rendering.
+- **Active theme:** Cyber Vision and Energy emit particles on every frame; the particle pool is bounded to 3,000 particles maximum to prevent unbounded allocation.
+
+The application targets 60 FPS. Actual FPS will vary with hardware and active effects. The in-experience HUD displays the real-time FPS for reference.
+
+---
+
+## ⚙️ Technology Stack
+
+| Technology | Version used | Role |
+|------------|-------------|------|
+| Python | 3.13.7 (3.12+ supported) | Runtime |
+| [OpenCV](https://opencv.org/) (`opencv-python`) | 5.0.0 | Image processing, connected components, morphology |
+| [MediaPipe](https://developers.google.com/mediapipe) | 1.0.1 | Hand landmark detection, person segmentation (TFLite) |
+| [NumPy](https://numpy.org/) | 2.5.3 | Array operations, mask processing, colour math |
+| [pygame-ce](https://pyga.me/) | 2.5.8 | Window management, rendering, event loop |
+| [pytest](https://pytest.org/) | 9.1.1 | Automated test suite |
+
+---
+
+## ⚠️ Known Limitations
+
+| Limitation | Detail |
+|------------|--------|
+| **Single-channel segmentation mask** | MediaPipe selfie segmenter produces one unified foreground mask. Multi-person separation via connected components degrades when people physically overlap or stand very close together. |
+| **RGB webcam only** | No depth camera, thermal camera, or specialized hardware required or used. Thermal/X-Ray themes are RGB-based visual simulations. |
+| **No actual temperature measurement** | Thermal Simulation is derived from image luminance, not heat sensors. |
+| **No actual X-ray imaging** | X-Ray Style is a structural visualization, not radiographic imaging. |
+| **No physical depth measurement** | Radar theme uses visual tracking only; no distance data unless depth hardware is added. |
+| **Session-based tracking IDs** | Tracking IDs reset when the experience is entered or `R` is pressed. IDs are not persisted between sessions. |
+| **Performance is hardware-dependent** | No specific FPS guarantee on all hardware. |
+
+---
+
+## 🚀 Future Work
+
+- **Dedicated instance segmentation:** Replace the connected-component decomposition with a true multi-instance segmentation model (e.g. YOLOv8-seg, Mask R-CNN) for more robust person separation when people are close.
+- **Pose estimation integration:** Integrate MediaPipe Pose or equivalent for accurate skeleton landmarks in the X-Ray theme.
+- **GPU-accelerated rendering:** Offload particle and compositing operations to GPU using pygame with hardware surfaces or a compute shader pipeline.
+- **Depth camera support:** Integrate Intel RealSense or similar for real-world spatial tracking in the Radar theme.
+- **Actual thermal camera integration:** Optional integration path for USB thermal cameras (e.g. FLIR Lepton) to replace the simulated thermal mode with real thermographic data.
+- **Additional visualization themes:** Night-vision, sonar, heat-signature trails, skeletal motion capture visualization.
+- **Interactive installation mode:** Kiosk/exhibition mode with auto-reset, loop-back, and remote monitoring.
+- **Cross-platform / web:** Explore deployment via WebAssembly + WebRTC for browser-based exhibition without local installation.
+
+---
+
+## 📈 Development Journey
+
+AETHER evolved over four phases from a gesture-controlled arcade game into a full computer-vision visualization platform:
+
+```
+Phase 1 — Vision Controller
+  Hand gesture → game controller replacement
+  Hand landmark detection → LEFT / RIGHT / JUMP / SLIDE
+
+Phase 2 — Elemental Cultivation
+  Both hands tracked simultaneously
+  Gesture-driven elemental particle and VFX system
+  Custom particle engine with object pooling
+
+Phase 3 — Phase Shift
+  Person segmentation + background modeling
+  Finger-count → real-time transparency control
+  Background compositor → genuine see-through compositing
+
+Phase 4 — Spectrum Vision
+  Multi-person connected-component decomposition
+  Centroid-distance temporal tracking → stable person IDs
+  Seven full-screen futuristic visualization themes
+  Cyber Vision primary showcase mode
+```
+
+---
+
+## 📄 License
+
+See [LICENSE](LICENSE) for details.
+
+---
+
+*AETHER — The Visionary is an independent engineering project built for computer vision exhibition and portfolio demonstration.*
